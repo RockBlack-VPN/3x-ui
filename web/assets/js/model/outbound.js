@@ -875,16 +875,16 @@ Outbound.FreedomSettings = class extends CommonClass {
             json.domainStrategy,
             json.redirect,
             json.fragment ? Outbound.FreedomSettings.Fragment.fromJson(json.fragment) : undefined,
-            json.noises ? json.noises.map(noise => Outbound.FreedomSettings.Noise.fromJson(noise)) : [new Outbound.FreedomSettings.Noise()],
+            json.noises ? json.noises.map(noise => Outbound.FreedomSettings.Noise.fromJson(noise)) : undefined,
         );
     }
 
     toJson() {
         return {
             domainStrategy: ObjectUtil.isEmpty(this.domainStrategy) ? undefined : this.domainStrategy,
-            redirect: this.redirect,
+            redirect: ObjectUtil.isEmpty(this.redirect) ? undefined: this.redirect,
             fragment: Object.keys(this.fragment).length === 0 ? undefined : this.fragment,
-            noises: Outbound.FreedomSettings.Noise.toJsonArray(this.noises),
+            noises: this.noises.length === 0 ? undefined : Outbound.FreedomSettings.Noise.toJsonArray(this.noises),
         };
     }
 };
@@ -936,10 +936,6 @@ Outbound.FreedomSettings.Noise = class extends CommonClass {
             packet: this.packet,
             delay: this.delay,
         };
-    }
-
-    static toJsonArray(noises) {
-        return noises.map(noise => noise.toJson());
     }
 };
 
@@ -1182,8 +1178,7 @@ Outbound.WireguardSettings = class extends CommonClass {
         domainStrategy = '',
         reserved = '',
         peers = [new Outbound.WireguardSettings.Peer()],
-        kernelMode = false,
-        kernelTun = false
+        noKernelTun = false,
     ) {
         super();
         this.mtu = mtu;
@@ -1194,8 +1189,7 @@ Outbound.WireguardSettings = class extends CommonClass {
         this.domainStrategy = domainStrategy;
         this.reserved = Array.isArray(reserved) ? reserved.join(',') : reserved;
         this.peers = peers;
-        this.kernelMode = kernelMode;
-        this.kernelTun = kernelTun;
+        this.noKernelTun = noKernelTun;
     }
 
     addPeer() {
@@ -1215,8 +1209,7 @@ Outbound.WireguardSettings = class extends CommonClass {
             json.domainStrategy,
             json.reserved,
             json.peers.map(peer => Outbound.WireguardSettings.Peer.fromJson(peer)),
-            json.kernelMode,
-            json.kernelTun,
+            json.noKernelTun,
         );
     }
 
@@ -1229,8 +1222,7 @@ Outbound.WireguardSettings = class extends CommonClass {
             domainStrategy: WireguardDomainStrategy.includes(this.domainStrategy) ? this.domainStrategy : undefined,
             reserved: this.reserved ? this.reserved.split(",").map(Number) : undefined,
             peers: Outbound.WireguardSettings.Peer.toJsonArray(this.peers),
-            kernelMode: this.kernelMode,
-            kernelTun: this.kernelTun,
+            noKernelTun: this.noKernelTun,
         };
     }
 };

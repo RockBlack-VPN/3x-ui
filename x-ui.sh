@@ -46,6 +46,8 @@ elif [[ "${release}" == "manjaro" ]]; then
     echo "Your OS is Manjaro"
 elif [[ "${release}" == "armbian" ]]; then
     echo "Your OS is Armbian"
+elif [[ "${release}" == "alpine" ]]; then
+    echo "Your OS is Alpine Linux"
 elif [[ "${release}" == "opensuse-tumbleweed" ]]; then
     echo "Your OS is OpenSUSE Tumbleweed"
 elif [[ "${release}" == "openEuler" ]]; then
@@ -1457,7 +1459,7 @@ show_menu() {
   ${green}1.${plain} Install
   ${green}2.${plain} Update
   ${green}3.${plain} Update Menu
-  ${green}4.${plain} Custom Version
+  ${green}4.${plain} Old Version
   ${green}5.${plain} Uninstall
 ————————————————
   ${green}6.${plain} Reset Username & Password & Secret Token
