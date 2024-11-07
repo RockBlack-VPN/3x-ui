@@ -602,7 +602,7 @@ class Outbound extends CommonClass {
 
     canEnableReality() {
         if (![Protocols.VLESS, Protocols.Trojan].includes(this.protocol)) return false;
-        return ["tcp", "http", "grpc"].includes(this.stream.network);
+        return ["tcp", "http", "grpc", "splithttp"].includes(this.stream.network);
     }
 
     canEnableStream() {
@@ -960,7 +960,7 @@ Outbound.BlackholeSettings = class extends CommonClass {
 Outbound.DNSSettings = class extends CommonClass {
     constructor(
         network = 'udp',
-        address = '1.1.1.1',
+        address = '',
         port = 53,
         nonIPQuery = 'drop',
         blockTypes = []
