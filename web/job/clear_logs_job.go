@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"x-ui/logger"
-	"x-ui/xray"
+	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/xray"
 )
 
+// ClearLogsJob clears old log files to prevent disk space issues.
 type ClearLogsJob struct{}
 
+// NewClearLogsJob creates a new log cleanup job instance.
 func NewClearLogsJob() *ClearLogsJob {
 	return new(ClearLogsJob)
 }

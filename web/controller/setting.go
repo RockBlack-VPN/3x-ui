@@ -4,13 +4,15 @@ import (
 	"errors"
 	"time"
 
-	"x-ui/web/entity"
-	"x-ui/web/service"
-	"x-ui/web/session"
+	"github.com/mhsanaei/3x-ui/v2/util/crypto"
+	"github.com/mhsanaei/3x-ui/v2/web/entity"
+	"github.com/mhsanaei/3x-ui/v2/web/service"
+	"github.com/mhsanaei/3x-ui/v2/web/session"
 
 	"github.com/gin-gonic/gin"
 )
 
+// updateUserForm represents the form for updating user credentials.
 type updateUserForm struct {
 	OldUsername string `json:"oldUsername" form:"oldUsername"`
 	OldPassword string `json:"oldPassword" form:"oldPassword"`
@@ -18,22 +20,21 @@ type updateUserForm struct {
 	NewPassword string `json:"newPassword" form:"newPassword"`
 }
 
-type updateSecretForm struct {
-	LoginSecret string `json:"loginSecret" form:"loginSecret"`
-}
-
+// SettingController handles settings and user management operations.
 type SettingController struct {
 	settingService service.SettingService
 	userService    service.UserService
 	panelService   service.PanelService
 }
 
+// NewSettingController creates a new SettingController and initializes its routes.
 func NewSettingController(g *gin.RouterGroup) *SettingController {
 	a := &SettingController{}
 	a.initRouter(g)
 	return a
 }
 
+// initRouter sets up the routes for settings management.
 func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g = g.Group("/setting")
 
@@ -43,10 +44,9 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.POST("/updateUser", a.updateUser)
 	g.POST("/restartPanel", a.restartPanel)
 	g.GET("/getDefaultJsonConfig", a.getDefaultXrayConfig)
-	g.POST("/updateUserSecret", a.updateSecret)
-	g.POST("/getUserSecret", a.getUserSecret)
 }
 
+// getAllSetting retrieves all current settings.
 func (a *SettingController) getAllSetting(c *gin.Context) {
 	allSetting, err := a.settingService.GetAllSetting()
 	if err != nil {
@@ -56,6 +56,7 @@ func (a *SettingController) getAllSetting(c *gin.Context) {
 	jsonObj(c, allSetting, nil)
 }
 
+// getDefaultSettings retrieves the default settings based on the host.
 func (a *SettingController) getDefaultSettings(c *gin.Context) {
 	result, err := a.settingService.GetDefaultSettings(c.Request.Host)
 	if err != nil {
@@ -65,6 +66,7 @@ func (a *SettingController) getDefaultSettings(c *gin.Context) {
 	jsonObj(c, result, nil)
 }
 
+// updateSetting updates all settings with the provided data.
 func (a *SettingController) updateSetting(c *gin.Context) {
 	allSetting := &entity.AllSetting{}
 	err := c.ShouldBind(allSetting)
@@ -76,6 +78,7 @@ func (a *SettingController) updateSetting(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
 }
 
+// updateUser updates the current user's username and password.
 func (a *SettingController) updateUser(c *gin.Context) {
 	form := &updateUserForm{}
 	err := c.ShouldBind(form)
@@ -84,51 +87,30 @@ func (a *SettingController) updateUser(c *gin.Context) {
 		return
 	}
 	user := session.GetLoginUser(c)
-	if user.Username != form.OldUsername || user.Password != form.OldPassword {
-		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifyUser"), errors.New(I18nWeb(c, "pages.settings.toasts.originalUserPassIncorrect")))
+	if user.Username != form.OldUsername || !crypto.CheckPasswordHash(user.Password, form.OldPassword) {
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifyUserError"), errors.New(I18nWeb(c, "pages.settings.toasts.originalUserPassIncorrect")))
 		return
 	}
 	if form.NewUsername == "" || form.NewPassword == "" {
-		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifyUser"), errors.New(I18nWeb(c, "pages.settings.toasts.userPassMustBeNotEmpty")))
+		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifyUserError"), errors.New(I18nWeb(c, "pages.settings.toasts.userPassMustBeNotEmpty")))
 		return
 	}
 	err = a.userService.UpdateUser(user.Id, form.NewUsername, form.NewPassword)
 	if err == nil {
 		user.Username = form.NewUsername
-		user.Password = form.NewPassword
+		user.Password, _ = crypto.HashPasswordAsBcrypt(form.NewPassword)
 		session.SetLoginUser(c, user)
 	}
 	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifyUser"), err)
 }
 
+// restartPanel restarts the panel service after a delay.
 func (a *SettingController) restartPanel(c *gin.Context) {
 	err := a.panelService.RestartPanel(time.Second * 3)
-	jsonMsg(c, I18nWeb(c, "pages.settings.restartPanel"), err)
+	jsonMsg(c, I18nWeb(c, "pages.settings.restartPanelSuccess"), err)
 }
 
-func (a *SettingController) updateSecret(c *gin.Context) {
-	form := &updateSecretForm{}
-	err := c.ShouldBind(form)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
-	}
-	user := session.GetLoginUser(c)
-	err = a.userService.UpdateUserSecret(user.Id, form.LoginSecret)
-	if err == nil {
-		user.LoginSecret = form.LoginSecret
-		session.SetLoginUser(c, user)
-	}
-	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifyUser"), err)
-}
-
-func (a *SettingController) getUserSecret(c *gin.Context) {
-	loginUser := session.GetLoginUser(c)
-	user := a.userService.GetUserSecret(loginUser.Id)
-	if user != nil {
-		jsonObj(c, user, nil)
-	}
-}
-
+// getDefaultXrayConfig retrieves the default Xray configuration.
 func (a *SettingController) getDefaultXrayConfig(c *gin.Context) {
 	defaultJsonConfig, err := a.settingService.GetDefaultXrayConfig()
 	if err != nil {

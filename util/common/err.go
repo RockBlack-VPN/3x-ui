@@ -1,23 +1,27 @@
+// Package common provides common utility functions for error handling, formatting, and multi-error management.
 package common
 
 import (
 	"errors"
 	"fmt"
 
-	"x-ui/logger"
+	"github.com/mhsanaei/3x-ui/v2/logger"
 )
 
-func NewErrorf(format string, a ...interface{}) error {
+// NewErrorf creates a new error with formatted message.
+func NewErrorf(format string, a ...any) error {
 	msg := fmt.Sprintf(format, a...)
 	return errors.New(msg)
 }
 
-func NewError(a ...interface{}) error {
+// NewError creates a new error from the given arguments.
+func NewError(a ...any) error {
 	msg := fmt.Sprintln(a...)
 	return errors.New(msg)
 }
 
-func Recover(msg string) interface{} {
+// Recover handles panic recovery and logs the panic error if a message is provided.
+func Recover(msg string) any {
 	panicErr := recover()
 	if panicErr != nil {
 		if msg != "" {

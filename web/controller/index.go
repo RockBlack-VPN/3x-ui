@@ -5,20 +5,22 @@ import (
 	"text/template"
 	"time"
 
-	"x-ui/logger"
-	"x-ui/web/service"
-	"x-ui/web/session"
+	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/web/service"
+	"github.com/mhsanaei/3x-ui/v2/web/session"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
 
+// LoginForm represents the login request structure.
 type LoginForm struct {
-	Username    string `json:"username" form:"username"`
-	Password    string `json:"password" form:"password"`
-	LoginSecret string `json:"loginSecret" form:"loginSecret"`
+	Username      string `json:"username" form:"username"`
+	Password      string `json:"password" form:"password"`
+	TwoFactorCode string `json:"twoFactorCode" form:"twoFactorCode"`
 }
 
+// IndexController handles the main index and login-related routes.
 type IndexController struct {
 	BaseController
 
@@ -27,19 +29,23 @@ type IndexController struct {
 	tgbot          service.Tgbot
 }
 
+// NewIndexController creates a new IndexController and initializes its routes.
 func NewIndexController(g *gin.RouterGroup) *IndexController {
 	a := &IndexController{}
 	a.initRouter(g)
 	return a
 }
 
+// initRouter sets up the routes for index, login, logout, and two-factor authentication.
 func (a *IndexController) initRouter(g *gin.RouterGroup) {
 	g.GET("/", a.index)
-	g.POST("/login", a.login)
 	g.GET("/logout", a.logout)
-	g.POST("/getSecretStatus", a.getSecretStatus)
+
+	g.POST("/login", a.login)
+	g.POST("/getTwoFactorEnable", a.getTwoFactorEnable)
 }
 
+// index handles the root route, redirecting logged-in users to the panel or showing the login page.
 func (a *IndexController) index(c *gin.Context) {
 	if session.IsLogin(c) {
 		c.Redirect(http.StatusTemporaryRedirect, "panel/")
@@ -48,6 +54,7 @@ func (a *IndexController) index(c *gin.Context) {
 	html(c, "login.html", "pages.login.title", nil)
 }
 
+// login handles user authentication and session creation.
 func (a *IndexController) login(c *gin.Context) {
 	var form LoginForm
 
@@ -64,14 +71,13 @@ func (a *IndexController) login(c *gin.Context) {
 		return
 	}
 
-	user := a.userService.CheckUser(form.Username, form.Password, form.LoginSecret)
+	user := a.userService.CheckUser(form.Username, form.Password, form.TwoFactorCode)
 	timeStr := time.Now().Format("2006-01-02 15:04:05")
 	safeUser := template.HTMLEscapeString(form.Username)
 	safePass := template.HTMLEscapeString(form.Password)
-	safeSecret := template.HTMLEscapeString(form.LoginSecret)
 
 	if user == nil {
-		logger.Warningf("wrong username: \"%s\", password: \"%s\", secret: \"%s\", IP: \"%s\"", safeUser, safePass, safeSecret, getRemoteIp(c))
+		logger.Warningf("wrong username: \"%s\", password: \"%s\", IP: \"%s\"", safeUser, safePass, getRemoteIp(c))
 		a.tgbot.UserLoginNotify(safeUser, safePass, getRemoteIp(c), timeStr, 0)
 		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.login.toasts.wrongUsernameOrPassword"))
 		return
@@ -96,6 +102,7 @@ func (a *IndexController) login(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.login.toasts.successLogin"), nil)
 }
 
+// logout handles user logout by clearing the session and redirecting to the login page.
 func (a *IndexController) logout(c *gin.Context) {
 	user := session.GetLoginUser(c)
 	if user != nil {
@@ -108,8 +115,9 @@ func (a *IndexController) logout(c *gin.Context) {
 	c.Redirect(http.StatusTemporaryRedirect, c.GetString("base_path"))
 }
 
-func (a *IndexController) getSecretStatus(c *gin.Context) {
-	status, err := a.settingService.GetSecretStatus()
+// getTwoFactorEnable retrieves the current status of two-factor authentication.
+func (a *IndexController) getTwoFactorEnable(c *gin.Context) {
+	status, err := a.settingService.GetTwoFactorEnable()
 	if err == nil {
 		jsonObj(c, status, nil)
 	}

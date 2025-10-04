@@ -10,70 +10,98 @@ import (
 	"strings"
 	"time"
 
-	"x-ui/database"
-	"x-ui/database/model"
-	"x-ui/logger"
-	"x-ui/util/common"
-	"x-ui/util/random"
-	"x-ui/util/reflect_util"
-	"x-ui/web/entity"
-	"x-ui/xray"
+	"github.com/mhsanaei/3x-ui/v2/database"
+	"github.com/mhsanaei/3x-ui/v2/database/model"
+	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/util/common"
+	"github.com/mhsanaei/3x-ui/v2/util/random"
+	"github.com/mhsanaei/3x-ui/v2/util/reflect_util"
+	"github.com/mhsanaei/3x-ui/v2/web/entity"
+	"github.com/mhsanaei/3x-ui/v2/xray"
 )
 
 //go:embed config.json
 var xrayTemplateConfig string
 
 var defaultValueMap = map[string]string{
-	"xrayTemplateConfig": xrayTemplateConfig,
-	"webListen":          "",
-	"webDomain":          "",
-	"webPort":            "2053",
-	"webCertFile":        "",
-	"webKeyFile":         "",
-	"secret":             random.Seq(32),
-	"webBasePath":        "/",
-	"sessionMaxAge":      "60",
-	"pageSize":           "50",
-	"expireDiff":         "0",
-	"trafficDiff":        "0",
-	"remarkModel":        "-ieo",
-	"timeLocation":       "Local",
-	"tgBotEnable":        "false",
-	"tgBotToken":         "",
-	"tgBotProxy":         "",
-	"tgBotAPIServer":     "",
-	"tgBotChatId":        "",
-	"tgRunTime":          "@daily",
-	"tgBotBackup":        "false",
-	"tgBotLoginNotify":   "true",
-	"tgCpu":              "80",
-	"tgLang":             "en-US",
-	"secretEnable":       "false",
-	"subEnable":          "false",
-	"subListen":          "",
-	"subPort":            "2096",
-	"subPath":            "/sub/",
-	"subDomain":          "",
-	"subCertFile":        "",
-	"subKeyFile":         "",
-	"subUpdates":         "12",
-	"subEncrypt":         "true",
-	"subShowInfo":        "true",
-	"subURI":             "",
-	"subJsonPath":        "/json/",
-	"subJsonURI":         "",
-	"subJsonFragment":    "",
-	"subJsonNoises":      "",
-	"subJsonMux":         "",
-	"subJsonRules":       "",
-	"datepicker":         "gregorian",
-	"warp":               "",
+	"xrayTemplateConfig":          xrayTemplateConfig,
+	"webListen":                   "",
+	"webDomain":                   "",
+	"webPort":                     "2053",
+	"webCertFile":                 "",
+	"webKeyFile":                  "",
+	"secret":                      random.Seq(32),
+	"webBasePath":                 "/",
+	"sessionMaxAge":               "360",
+	"pageSize":                    "25",
+	"expireDiff":                  "0",
+	"trafficDiff":                 "0",
+	"remarkModel":                 "-ieo",
+	"timeLocation":                "Local",
+	"tgBotEnable":                 "false",
+	"tgBotToken":                  "",
+	"tgBotProxy":                  "",
+	"tgBotAPIServer":              "",
+	"tgBotChatId":                 "",
+	"tgRunTime":                   "@daily",
+	"tgBotBackup":                 "false",
+	"tgBotLoginNotify":            "true",
+	"tgCpu":                       "80",
+	"tgLang":                      "en-US",
+	"twoFactorEnable":             "false",
+	"twoFactorToken":              "",
+	"subEnable":                   "true",
+	"subJsonEnable":               "false",
+	"subTitle":                    "",
+	"subListen":                   "",
+	"subPort":                     "2096",
+	"subPath":                     "/sub/",
+	"subDomain":                   "",
+	"subCertFile":                 "",
+	"subKeyFile":                  "",
+	"subUpdates":                  "12",
+	"subEncrypt":                  "true",
+	"subShowInfo":                 "true",
+	"subURI":                      "",
+	"subJsonPath":                 "/json/",
+	"subJsonURI":                  "",
+	"subJsonFragment":             "",
+	"subJsonNoises":               "",
+	"subJsonMux":                  "",
+	"subJsonRules":                "",
+	"datepicker":                  "gregorian",
+	"warp":                        "",
+	"externalTrafficInformEnable": "false",
+	"externalTrafficInformURI":    "",
+	// LDAP defaults
+	"ldapEnable":                  "false",
+	"ldapHost":                    "",
+	"ldapPort":                    "389",
+	"ldapUseTLS":                  "false",
+	"ldapBindDN":                  "",
+	"ldapPassword":                "",
+	"ldapBaseDN":                  "",
+	"ldapUserFilter":              "(objectClass=person)",
+	"ldapUserAttr":                "mail",
+	"ldapVlessField":              "vless_enabled",
+	"ldapSyncCron":                "@every 1m",
+	"ldapFlagField":               "",
+	"ldapTruthyValues":            "true,1,yes,on",
+	"ldapInvertFlag":              "false",
+	"ldapInboundTags":             "",
+	"ldapAutoCreate":              "false",
+	"ldapAutoDelete":              "false",
+	"ldapDefaultTotalGB":          "0",
+	"ldapDefaultExpiryDays":       "0",
+	"ldapDefaultLimitIP":          "0",
 }
 
+// SettingService provides business logic for application settings management.
+// It handles configuration storage, retrieval, and validation for all system settings.
 type SettingService struct{}
 
-func (s *SettingService) GetDefaultJsonConfig() (interface{}, error) {
-	var jsonData interface{}
+func (s *SettingService) GetDefaultJsonConfig() (any, error) {
+	var jsonData any
 	err := json.Unmarshal([]byte(xrayTemplateConfig), &jsonData)
 	if err != nil {
 		return nil, err
@@ -163,8 +191,7 @@ func (s *SettingService) ResetSettings() error {
 		return err
 	}
 	return db.Model(model.User{}).
-		Where("1 = 1").
-		Update("login_secret", "").Error
+		Where("1 = 1").Error
 }
 
 func (s *SettingService) getSetting(key string) (*model.Setting, error) {
@@ -315,6 +342,22 @@ func (s *SettingService) GetTgLang() (string, error) {
 	return s.getString("tgLang")
 }
 
+func (s *SettingService) GetTwoFactorEnable() (bool, error) {
+	return s.getBool("twoFactorEnable")
+}
+
+func (s *SettingService) SetTwoFactorEnable(value bool) error {
+	return s.setBool("twoFactorEnable", value)
+}
+
+func (s *SettingService) GetTwoFactorToken() (string, error) {
+	return s.getString("twoFactorToken")
+}
+
+func (s *SettingService) SetTwoFactorToken(value string) error {
+	return s.setString("twoFactorToken", value)
+}
+
 func (s *SettingService) GetPort() (int, error) {
 	return s.getInt("webPort")
 }
@@ -353,14 +396,6 @@ func (s *SettingService) GetSessionMaxAge() (int, error) {
 
 func (s *SettingService) GetRemarkModel() (string, error) {
 	return s.getString("remarkModel")
-}
-
-func (s *SettingService) GetSecretStatus() (bool, error) {
-	return s.getBool("secretEnable")
-}
-
-func (s *SettingService) SetSecretStatus(value bool) error {
-	return s.setBool("secretEnable", value)
 }
 
 func (s *SettingService) GetSecret() ([]byte, error) {
@@ -414,6 +449,14 @@ func (s *SettingService) GetTimeLocation() (*time.Location, error) {
 
 func (s *SettingService) GetSubEnable() (bool, error) {
 	return s.getBool("subEnable")
+}
+
+func (s *SettingService) GetSubJsonEnable() (bool, error) {
+	return s.getBool("subJsonEnable")
+}
+
+func (s *SettingService) GetSubTitle() (string, error) {
+	return s.getString("subTitle")
 }
 
 func (s *SettingService) GetSubListen() (string, error) {
@@ -496,12 +539,109 @@ func (s *SettingService) SetWarp(data string) error {
 	return s.setString("warp", data)
 }
 
+func (s *SettingService) GetExternalTrafficInformEnable() (bool, error) {
+	return s.getBool("externalTrafficInformEnable")
+}
+
+func (s *SettingService) SetExternalTrafficInformEnable(value bool) error {
+	return s.setBool("externalTrafficInformEnable", value)
+}
+
+func (s *SettingService) GetExternalTrafficInformURI() (string, error) {
+	return s.getString("externalTrafficInformURI")
+}
+
+func (s *SettingService) SetExternalTrafficInformURI(InformURI string) error {
+	return s.setString("externalTrafficInformURI", InformURI)
+}
+
 func (s *SettingService) GetIpLimitEnable() (bool, error) {
 	accessLogPath, err := xray.GetAccessLogPath()
 	if err != nil {
 		return false, err
 	}
 	return (accessLogPath != "none" && accessLogPath != ""), nil
+}
+
+// LDAP exported getters
+func (s *SettingService) GetLdapEnable() (bool, error) {
+    return s.getBool("ldapEnable")
+}
+
+func (s *SettingService) GetLdapHost() (string, error) {
+    return s.getString("ldapHost")
+}
+
+func (s *SettingService) GetLdapPort() (int, error) {
+    return s.getInt("ldapPort")
+}
+
+func (s *SettingService) GetLdapUseTLS() (bool, error) {
+    return s.getBool("ldapUseTLS")
+}
+
+func (s *SettingService) GetLdapBindDN() (string, error) {
+    return s.getString("ldapBindDN")
+}
+
+func (s *SettingService) GetLdapPassword() (string, error) {
+    return s.getString("ldapPassword")
+}
+
+func (s *SettingService) GetLdapBaseDN() (string, error) {
+    return s.getString("ldapBaseDN")
+}
+
+func (s *SettingService) GetLdapUserFilter() (string, error) {
+    return s.getString("ldapUserFilter")
+}
+
+func (s *SettingService) GetLdapUserAttr() (string, error) {
+    return s.getString("ldapUserAttr")
+}
+
+func (s *SettingService) GetLdapVlessField() (string, error) {
+    return s.getString("ldapVlessField")
+}
+
+func (s *SettingService) GetLdapSyncCron() (string, error) {
+    return s.getString("ldapSyncCron")
+}
+
+func (s *SettingService) GetLdapFlagField() (string, error) {
+    return s.getString("ldapFlagField")
+}
+
+func (s *SettingService) GetLdapTruthyValues() (string, error) {
+    return s.getString("ldapTruthyValues")
+}
+
+func (s *SettingService) GetLdapInvertFlag() (bool, error) {
+    return s.getBool("ldapInvertFlag")
+}
+
+func (s *SettingService) GetLdapInboundTags() (string, error) {
+    return s.getString("ldapInboundTags")
+}
+
+func (s *SettingService) GetLdapAutoCreate() (bool, error) {
+    return s.getBool("ldapAutoCreate")
+}
+
+func (s *SettingService) GetLdapAutoDelete() (bool, error) {
+    return s.getBool("ldapAutoDelete")
+}
+
+func (s *SettingService) GetLdapDefaultTotalGB() (int, error) {
+    return s.getInt("ldapDefaultTotalGB")
+}
+
+func (s *SettingService) GetLdapDefaultExpiryDays() (int, error) {
+    return s.getInt("ldapDefaultExpiryDays")
+}
+
+func (s *SettingService) GetLdapDefaultLimitIP() (int, error) {
+    return s.getInt("ldapDefaultLimitIP")
 }
 
 func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
@@ -525,8 +665,8 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	return common.Combine(errs...)
 }
 
-func (s *SettingService) GetDefaultXrayConfig() (interface{}, error) {
-	var jsonData interface{}
+func (s *SettingService) GetDefaultXrayConfig() (any, error) {
+	var jsonData any
 	err := json.Unmarshal([]byte(xrayTemplateConfig), &jsonData)
 	if err != nil {
 		return nil, err
@@ -534,24 +674,26 @@ func (s *SettingService) GetDefaultXrayConfig() (interface{}, error) {
 	return jsonData, nil
 }
 
-func (s *SettingService) GetDefaultSettings(host string) (interface{}, error) {
-	type settingFunc func() (interface{}, error)
+func (s *SettingService) GetDefaultSettings(host string) (any, error) {
+	type settingFunc func() (any, error)
 	settings := map[string]settingFunc{
-		"expireDiff":    func() (interface{}, error) { return s.GetExpireDiff() },
-		"trafficDiff":   func() (interface{}, error) { return s.GetTrafficDiff() },
-		"pageSize":      func() (interface{}, error) { return s.GetPageSize() },
-		"defaultCert":   func() (interface{}, error) { return s.GetCertFile() },
-		"defaultKey":    func() (interface{}, error) { return s.GetKeyFile() },
-		"tgBotEnable":   func() (interface{}, error) { return s.GetTgbotEnabled() },
-		"subEnable":     func() (interface{}, error) { return s.GetSubEnable() },
-		"subURI":        func() (interface{}, error) { return s.GetSubURI() },
-		"subJsonURI":    func() (interface{}, error) { return s.GetSubJsonURI() },
-		"remarkModel":   func() (interface{}, error) { return s.GetRemarkModel() },
-		"datepicker":    func() (interface{}, error) { return s.GetDatepicker() },
-		"ipLimitEnable": func() (interface{}, error) { return s.GetIpLimitEnable() },
+		"expireDiff":    func() (any, error) { return s.GetExpireDiff() },
+		"trafficDiff":   func() (any, error) { return s.GetTrafficDiff() },
+		"pageSize":      func() (any, error) { return s.GetPageSize() },
+		"defaultCert":   func() (any, error) { return s.GetCertFile() },
+		"defaultKey":    func() (any, error) { return s.GetKeyFile() },
+		"tgBotEnable":   func() (any, error) { return s.GetTgbotEnabled() },
+		"subEnable":     func() (any, error) { return s.GetSubEnable() },
+		"subJsonEnable": func() (any, error) { return s.GetSubJsonEnable() },
+		"subTitle":      func() (any, error) { return s.GetSubTitle() },
+		"subURI":        func() (any, error) { return s.GetSubURI() },
+		"subJsonURI":    func() (any, error) { return s.GetSubJsonURI() },
+		"remarkModel":   func() (any, error) { return s.GetRemarkModel() },
+		"datepicker":    func() (any, error) { return s.GetDatepicker() },
+		"ipLimitEnable": func() (any, error) { return s.GetIpLimitEnable() },
 	}
 
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 
 	for key, fn := range settings {
 		value, err := fn()
@@ -561,8 +703,16 @@ func (s *SettingService) GetDefaultSettings(host string) (interface{}, error) {
 		result[key] = value
 	}
 
-	if result["subEnable"].(bool) && (result["subURI"].(string) == "" || result["subJsonURI"].(string) == "") {
+	subEnable := result["subEnable"].(bool)
+	subJsonEnable := false
+	if v, ok := result["subJsonEnable"]; ok {
+		if b, ok2 := v.(bool); ok2 {
+			subJsonEnable = b
+		}
+	}
+	if (subEnable && result["subURI"].(string) == "") || (subJsonEnable && result["subJsonURI"].(string) == "") {
 		subURI := ""
+		subTitle, _ := s.GetSubTitle()
 		subPort, _ := s.GetSubPort()
 		subPath, _ := s.GetSubPath()
 		subJsonPath, _ := s.GetSubJsonPath()
@@ -586,10 +736,13 @@ func (s *SettingService) GetDefaultSettings(host string) (interface{}, error) {
 		} else {
 			subURI += fmt.Sprintf("%s:%d", subDomain, subPort)
 		}
-		if result["subURI"].(string) == "" {
+		if subEnable && result["subURI"].(string) == "" {
 			result["subURI"] = subURI + subPath
 		}
-		if result["subJsonURI"].(string) == "" {
+		if result["subTitle"].(string) == "" {
+			result["subTitle"] = subTitle
+		}
+		if subJsonEnable && result["subJsonURI"].(string) == "" {
 			result["subJsonURI"] = subURI + subJsonPath
 		}
 	}

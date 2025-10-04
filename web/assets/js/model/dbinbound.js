@@ -6,9 +6,12 @@ class DBInbound {
         this.up = 0;
         this.down = 0;
         this.total = 0;
+        this.allTime = 0;
         this.remark = "";
         this.enable = true;
         this.expiryTime = 0;
+        this.trafficReset = "never";
+        this.lastTrafficResetTime = 0;
 
         this.listen = "";
         this.port = 0;
@@ -25,11 +28,11 @@ class DBInbound {
     }
 
     get totalGB() {
-        return toFixed(this.total / ONE_GB, 2);
+        return NumberFormatter.toFixed(this.total / SizeFormatter.ONE_GB, 2);
     }
 
     set totalGB(gb) {
-        this.total = toFixed(gb * ONE_GB, 0);
+        this.total = NumberFormatter.toFixed(gb * SizeFormatter.ONE_GB, 0);
     }
 
     get isVMess() {
@@ -48,8 +51,8 @@ class DBInbound {
         return this.protocol === Protocols.SHADOWSOCKS;
     }
 
-    get isSocks() {
-        return this.protocol === Protocols.SOCKS;
+    get isMixed() {
+        return this.protocol === Protocols.MIXED;
     }
 
     get isHTTP() {

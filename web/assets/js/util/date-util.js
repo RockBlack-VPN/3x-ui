@@ -108,14 +108,14 @@ Date.prototype.setMaxTime = function () {
  * Formatting date
  */
 Date.prototype.formatDate = function () {
-    return this.getFullYear() + "-" + addZero(this.getMonth() + 1) + "-" + addZero(this.getDate());
+    return this.getFullYear() + "-" + NumberFormatter.addZero(this.getMonth() + 1) + "-" + NumberFormatter.addZero(this.getDate());
 };
 
 /**
  * Format time
  */
 Date.prototype.formatTime = function () {
-    return addZero(this.getHours()) + ":" + addZero(this.getMinutes()) + ":" + addZero(this.getSeconds());
+    return NumberFormatter.addZero(this.getHours()) + ":" + NumberFormatter.addZero(this.getMinutes()) + ":" + NumberFormatter.addZero(this.getSeconds());
 };
 
 /**
@@ -134,7 +134,7 @@ class DateUtil {
     }
 
     static formatMillis(millis) {
-        return moment(millis).format('YYYY-M-D H:m:s');
+        return moment(millis).format('YYYY-M-D HH:mm:ss');
     }
 
     static firstDayOfMonth() {

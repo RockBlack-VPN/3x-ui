@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -11,18 +12,22 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"x-ui/config"
-	"x-ui/database"
-	"x-ui/logger"
-	"x-ui/util/common"
-	"x-ui/util/sys"
-	"x-ui/xray"
+	"github.com/mhsanaei/3x-ui/v2/config"
+	"github.com/mhsanaei/3x-ui/v2/database"
+	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/util/common"
+	"github.com/mhsanaei/3x-ui/v2/util/sys"
+	"github.com/mhsanaei/3x-ui/v2/xray"
 
+	"github.com/google/uuid"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
@@ -31,14 +36,18 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 )
 
+// ProcessState represents the current state of a system process.
 type ProcessState string
 
+// Process state constants
 const (
-	Running ProcessState = "running"
-	Stop    ProcessState = "stop"
-	Error   ProcessState = "error"
+	Running ProcessState = "running" // Process is running normally
+	Stop    ProcessState = "stop"    // Process is stopped
+	Error   ProcessState = "error"   // Process is in error state
 )
 
+// Status represents comprehensive system and application status information.
+// It includes CPU, memory, disk, network statistics, and Xray process status.
 type Status struct {
 	T           time.Time `json:"-"`
 	Cpu         float64   `json:"cpu"`
@@ -85,28 +94,130 @@ type Status struct {
 	} `json:"appStats"`
 }
 
+// Release represents information about a software release from GitHub.
 type Release struct {
-	TagName string `json:"tag_name"`
+	TagName string `json:"tag_name"` // The tag name of the release
 }
 
+// ServerService provides business logic for server monitoring and management.
+// It handles system status collection, IP detection, and application statistics.
 type ServerService struct {
-	xrayService    XrayService
-	inboundService InboundService
+	xrayService        XrayService
+	inboundService     InboundService
+	cachedIPv4         string
+	cachedIPv6         string
+	noIPv6             bool
+	mu                 sync.Mutex
+	lastCPUTimes       cpu.TimesStat
+	hasLastCPUSample   bool
+	hasNativeCPUSample bool
+	emaCPU             float64
+	cpuHistory         []CPUSample
+	cachedCpuSpeedMhz  float64
+	lastCpuInfoAttempt time.Time
+}
+
+// AggregateCpuHistory returns up to maxPoints averaged buckets of size bucketSeconds over recent data.
+func (s *ServerService) AggregateCpuHistory(bucketSeconds int, maxPoints int) []map[string]any {
+	if bucketSeconds <= 0 || maxPoints <= 0 {
+		return nil
+	}
+	cutoff := time.Now().Add(-time.Duration(bucketSeconds*maxPoints) * time.Second).Unix()
+	s.mu.Lock()
+	// find start index (history sorted ascending)
+	hist := s.cpuHistory
+	// binary-ish scan (simple linear from end since size capped ~10800 is fine)
+	startIdx := 0
+	for i := len(hist) - 1; i >= 0; i-- {
+		if hist[i].T < cutoff {
+			startIdx = i + 1
+			break
+		}
+	}
+	if startIdx >= len(hist) {
+		s.mu.Unlock()
+		return []map[string]any{}
+	}
+	slice := hist[startIdx:]
+	// copy for unlock
+	tmp := make([]CPUSample, len(slice))
+	copy(tmp, slice)
+	s.mu.Unlock()
+	if len(tmp) == 0 {
+		return []map[string]any{}
+	}
+	var out []map[string]any
+	var acc []float64
+	bSize := int64(bucketSeconds)
+	curBucket := (tmp[0].T / bSize) * bSize
+	flush := func(ts int64) {
+		if len(acc) == 0 {
+			return
+		}
+		sum := 0.0
+		for _, v := range acc {
+			sum += v
+		}
+		avg := sum / float64(len(acc))
+		out = append(out, map[string]any{"t": ts, "cpu": avg})
+		acc = acc[:0]
+	}
+	for _, p := range tmp {
+		b := (p.T / bSize) * bSize
+		if b != curBucket {
+			flush(curBucket)
+			curBucket = b
+		}
+		acc = append(acc, p.Cpu)
+	}
+	flush(curBucket)
+	if len(out) > maxPoints {
+		out = out[len(out)-maxPoints:]
+	}
+	return out
+}
+
+// CPUSample single CPU utilization sample
+type CPUSample struct {
+	T   int64   `json:"t"`   // unix seconds
+	Cpu float64 `json:"cpu"` // percent 0..100
+}
+
+type LogEntry struct {
+	DateTime    time.Time
+	FromAddress string
+	ToAddress   string
+	Inbound     string
+	Outbound    string
+	Email       string
+	Event       int
 }
 
 func getPublicIP(url string) string {
-	resp, err := http.Get(url)
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+	}
+
+	resp, err := client.Get(url)
 	if err != nil {
 		return "N/A"
 	}
 	defer resp.Body.Close()
+
+	// Don't retry if access is blocked or region-restricted
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons {
+		return "N/A"
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "N/A"
+	}
 
 	ip, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "N/A"
 	}
 
-	ipString := string(ip)
+	ipString := strings.TrimSpace(string(ip))
 	if ipString == "" {
 		return "N/A"
 	}
@@ -120,11 +231,12 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		T: now,
 	}
 
-	percents, err := cpu.Percent(0, false)
+	// CPU stats
+	util, err := s.sampleCPUUtilization()
 	if err != nil {
 		logger.Warning("get cpu percent failed:", err)
 	} else {
-		status.Cpu = percents[0]
+		status.Cpu = util
 	}
 
 	status.CpuCores, err = cpu.Counts(false)
@@ -133,22 +245,34 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 	}
 
 	status.LogicalPro = runtime.NumCPU()
-	if p != nil && p.IsRunning() {
-		status.AppStats.Uptime = p.GetUptime()
-	} else {
-		status.AppStats.Uptime = 0
+
+	if status.CpuSpeedMhz = s.cachedCpuSpeedMhz; s.cachedCpuSpeedMhz == 0 && time.Since(s.lastCpuInfoAttempt) > 5*time.Minute {
+		s.lastCpuInfoAttempt = time.Now()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			cpuInfos, err := cpu.Info()
+			if err != nil {
+				logger.Warning("get cpu info failed:", err)
+				return
+			}
+			if len(cpuInfos) > 0 {
+				s.cachedCpuSpeedMhz = cpuInfos[0].Mhz
+				status.CpuSpeedMhz = s.cachedCpuSpeedMhz
+			} else {
+				logger.Warning("could not find cpu info")
+			}
+		}()
+		select {
+		case <-done:
+		case <-time.After(1500 * time.Millisecond):
+			logger.Warning("cpu info query timed out; will retry later")
+		}
+	} else if s.cachedCpuSpeedMhz != 0 {
+		status.CpuSpeedMhz = s.cachedCpuSpeedMhz
 	}
 
-	cpuInfos, err := cpu.Info()
-	if err != nil {
-		logger.Warning("get cpu info failed:", err)
-	} else if len(cpuInfos) > 0 {
-		cpuInfo := cpuInfos[0]
-		status.CpuSpeedMhz = cpuInfo.Mhz // setting CPU speed in MHz
-	} else {
-		logger.Warning("could not find cpu info")
-	}
-
+	// Uptime
 	upTime, err := host.Uptime()
 	if err != nil {
 		logger.Warning("get uptime failed:", err)
@@ -156,6 +280,7 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		status.Uptime = upTime
 	}
 
+	// Memory stats
 	memInfo, err := mem.VirtualMemory()
 	if err != nil {
 		logger.Warning("get virtual memory failed:", err)
@@ -172,14 +297,16 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		status.Swap.Total = swapInfo.Total
 	}
 
-	distInfo, err := disk.Usage("/")
+	// Disk stats
+	diskInfo, err := disk.Usage("/")
 	if err != nil {
-		logger.Warning("get dist usage failed:", err)
+		logger.Warning("get disk usage failed:", err)
 	} else {
-		status.Disk.Current = distInfo.Used
-		status.Disk.Total = distInfo.Total
+		status.Disk.Current = diskInfo.Used
+		status.Disk.Total = diskInfo.Total
 	}
 
+	// Load averages
 	avgState, err := load.Avg()
 	if err != nil {
 		logger.Warning("get load avg failed:", err)
@@ -187,6 +314,7 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		status.Loads = []float64{avgState.Load1, avgState.Load5, avgState.Load15}
 	}
 
+	// Network stats
 	ioStats, err := net.IOCounters(false)
 	if err != nil {
 		logger.Warning("get io counters failed:", err)
@@ -207,6 +335,7 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		logger.Warning("can not find io counters")
 	}
 
+	// TCP/UDP connections
 	status.TcpCount, err = sys.GetTCPCount()
 	if err != nil {
 		logger.Warning("get tcp connections failed:", err)
@@ -217,9 +346,49 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		logger.Warning("get udp connections failed:", err)
 	}
 
-	status.PublicIP.IPv4 = getPublicIP("https://api.ipify.org")
-	status.PublicIP.IPv6 = getPublicIP("https://api6.ipify.org")
+	// IP fetching with caching
+	showIp4ServiceLists := []string{
+		"https://api4.ipify.org",
+		"https://ipv4.icanhazip.com",
+		"https://v4.api.ipinfo.io/ip",
+		"https://ipv4.myexternalip.com/raw",
+		"https://4.ident.me",
+		"https://check-host.net/ip",
+	}
+	showIp6ServiceLists := []string{
+		"https://api6.ipify.org",
+		"https://ipv6.icanhazip.com",
+		"https://v6.api.ipinfo.io/ip",
+		"https://ipv6.myexternalip.com/raw",
+		"https://6.ident.me",
+	}
 
+	if s.cachedIPv4 == "" {
+		for _, ip4Service := range showIp4ServiceLists {
+			s.cachedIPv4 = getPublicIP(ip4Service)
+			if s.cachedIPv4 != "N/A" {
+				break
+			}
+		}
+	}
+
+	if s.cachedIPv6 == "" && !s.noIPv6 {
+		for _, ip6Service := range showIp6ServiceLists {
+			s.cachedIPv6 = getPublicIP(ip6Service)
+			if s.cachedIPv6 != "N/A" {
+				break
+			}
+		}
+	}
+
+	if s.cachedIPv6 == "N/A" {
+		s.noIPv6 = true
+	}
+
+	status.PublicIP.IPv4 = s.cachedIPv4
+	status.PublicIP.IPv6 = s.cachedIPv6
+
+	// Xray status
 	if s.xrayService.IsXrayRunning() {
 		status.Xray.State = Running
 		status.Xray.ErrorMsg = ""
@@ -233,9 +402,10 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		status.Xray.ErrorMsg = s.xrayService.GetXrayResult()
 	}
 	status.Xray.Version = s.xrayService.GetXrayVersion()
+
+	// Application stats
 	var rtm runtime.MemStats
 	runtime.ReadMemStats(&rtm)
-
 	status.AppStats.Mem = rtm.Sys
 	status.AppStats.Threads = uint32(runtime.NumGoroutine())
 	if p != nil && p.IsRunning() {
@@ -245,6 +415,106 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 	}
 
 	return status
+}
+
+func (s *ServerService) AppendCpuSample(t time.Time, v float64) {
+	const capacity = 9000 // ~5 hours @ 2s interval
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := CPUSample{T: t.Unix(), Cpu: v}
+	if n := len(s.cpuHistory); n > 0 && s.cpuHistory[n-1].T == p.T {
+		s.cpuHistory[n-1] = p
+	} else {
+		s.cpuHistory = append(s.cpuHistory, p)
+	}
+	if len(s.cpuHistory) > capacity {
+		s.cpuHistory = s.cpuHistory[len(s.cpuHistory)-capacity:]
+	}
+}
+
+func (s *ServerService) sampleCPUUtilization() (float64, error) {
+	// Try native platform-specific CPU implementation first (Windows, Linux, macOS)
+	if pct, err := sys.CPUPercentRaw(); err == nil {
+		s.mu.Lock()
+		// First call to native method returns 0 (initializes baseline)
+		if !s.hasNativeCPUSample {
+			s.hasNativeCPUSample = true
+			s.mu.Unlock()
+			return 0, nil
+		}
+		// Smooth with EMA
+		const alpha = 0.3
+		if s.emaCPU == 0 {
+			s.emaCPU = pct
+		} else {
+			s.emaCPU = alpha*pct + (1-alpha)*s.emaCPU
+		}
+		val := s.emaCPU
+		s.mu.Unlock()
+		return val, nil
+	}
+	// If native call fails, fall back to gopsutil times
+	// Read aggregate CPU times (all CPUs combined)
+	times, err := cpu.Times(false)
+	if err != nil {
+		return 0, err
+	}
+	if len(times) == 0 {
+		return 0, fmt.Errorf("no cpu times available")
+	}
+
+	cur := times[0]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// If this is the first sample, initialize and return current EMA (0 by default)
+	if !s.hasLastCPUSample {
+		s.lastCPUTimes = cur
+		s.hasLastCPUSample = true
+		return s.emaCPU, nil
+	}
+
+	// Compute busy and total deltas
+	// Note: Guest and GuestNice times are already included in User and Nice respectively,
+	// so we exclude them to avoid double-counting (Linux kernel accounting)
+	idleDelta := cur.Idle - s.lastCPUTimes.Idle
+	busyDelta := (cur.User - s.lastCPUTimes.User) +
+		(cur.System - s.lastCPUTimes.System) +
+		(cur.Nice - s.lastCPUTimes.Nice) +
+		(cur.Iowait - s.lastCPUTimes.Iowait) +
+		(cur.Irq - s.lastCPUTimes.Irq) +
+		(cur.Softirq - s.lastCPUTimes.Softirq) +
+		(cur.Steal - s.lastCPUTimes.Steal)
+
+	totalDelta := busyDelta + idleDelta
+
+	// Update last sample for next time
+	s.lastCPUTimes = cur
+
+	// Guard against division by zero or negative deltas (e.g., counter resets)
+	if totalDelta <= 0 {
+		return s.emaCPU, nil
+	}
+
+	raw := 100.0 * (busyDelta / totalDelta)
+	if raw < 0 {
+		raw = 0
+	}
+	if raw > 100 {
+		raw = 100
+	}
+
+	// Exponential moving average to smooth spikes
+	const alpha = 0.3 // smoothing factor (0<alpha<=1). Higher = more responsive, lower = smoother
+	if s.emaCPU == 0 {
+		// Initialize EMA with the first real reading to avoid long warm-up from zero
+		s.emaCPU = raw
+	} else {
+		s.emaCPU = alpha*raw + (1-alpha)*s.emaCPU
+	}
+
+	return s.emaCPU, nil
 }
 
 func (s *ServerService) GetXrayVersions() ([]string, error) {
@@ -285,33 +555,28 @@ func (s *ServerService) GetXrayVersions() ([]string, error) {
 			continue
 		}
 
-		if (major == 1 && minor == 8 && patch == 24) ||
-			(major >= 25) {
+		if major > 25 || (major == 25 && minor > 9) || (major == 25 && minor == 9 && patch >= 11) {
 			versions = append(versions, release.TagName)
 		}
 	}
 	return versions, nil
 }
 
-func (s *ServerService) StopXrayService() (string error) {
+func (s *ServerService) StopXrayService() error {
 	err := s.xrayService.StopXray()
 	if err != nil {
 		logger.Error("stop xray failed:", err)
 		return err
 	}
-
 	return nil
 }
 
-func (s *ServerService) RestartXrayService() (string error) {
-	s.xrayService.StopXray()
-	defer func() {
-		err := s.xrayService.RestartXray(true)
-		if err != nil {
-			logger.Error("start xray failed:", err)
-		}
-	}()
-
+func (s *ServerService) RestartXrayService() error {
+	err := s.xrayService.RestartXray(true)
+	if err != nil {
+		logger.Error("start xray failed:", err)
+		return err
+	}
 	return nil
 }
 
@@ -322,6 +587,8 @@ func (s *ServerService) downloadXRay(version string) (string, error) {
 	switch osName {
 	case "darwin":
 		osName = "macos"
+	case "windows":
+		osName = "windows"
 	}
 
 	switch arch {
@@ -365,19 +632,23 @@ func (s *ServerService) downloadXRay(version string) (string, error) {
 }
 
 func (s *ServerService) UpdateXray(version string) error {
+	// 1. Stop xray before doing anything
+	if err := s.StopXrayService(); err != nil {
+		logger.Warning("failed to stop xray before update:", err)
+	}
+
+	// 2. Download the zip
 	zipFileName, err := s.downloadXRay(version)
 	if err != nil {
 		return err
 	}
+	defer os.Remove(zipFileName)
 
 	zipFile, err := os.Open(zipFileName)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		zipFile.Close()
-		os.Remove(zipFileName)
-	}()
+	defer zipFile.Close()
 
 	stat, err := zipFile.Stat()
 	if err != nil {
@@ -388,19 +659,14 @@ func (s *ServerService) UpdateXray(version string) error {
 		return err
 	}
 
-	s.xrayService.StopXray()
-	defer func() {
-		err := s.xrayService.RestartXray(true)
-		if err != nil {
-			logger.Error("start xray failed:", err)
-		}
-	}()
-
+	// 3. Helper to extract files
 	copyZipFile := func(zipName string, fileName string) error {
 		zipFile, err := reader.Open(zipName)
 		if err != nil {
 			return err
 		}
+		defer zipFile.Close()
+		os.MkdirAll(filepath.Dir(fileName), 0755)
 		os.Remove(fileName)
 		file, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fs.ModePerm)
 		if err != nil {
@@ -411,8 +677,20 @@ func (s *ServerService) UpdateXray(version string) error {
 		return err
 	}
 
-	err = copyZipFile("xray", xray.GetBinaryPath())
+	// 4. Extract correct binary
+	if runtime.GOOS == "windows" {
+		targetBinary := filepath.Join("bin", "xray-windows-amd64.exe")
+		err = copyZipFile("xray.exe", targetBinary)
+	} else {
+		err = copyZipFile("xray", xray.GetBinaryPath())
+	}
 	if err != nil {
+		return err
+	}
+
+	// 5. Restart xray
+	if err := s.xrayService.RestartXray(true); err != nil {
+		logger.Error("start xray failed:", err)
 		return err
 	}
 
@@ -424,14 +702,39 @@ func (s *ServerService) GetLogs(count string, level string, syslog string) []str
 	var lines []string
 
 	if syslog == "true" {
-		cmdArgs := []string{"journalctl", "-u", "x-ui", "--no-pager", "-n", count, "-p", level}
-		// Run the command
-		cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+		// Check if running on Windows - journalctl is not available
+		if runtime.GOOS == "windows" {
+			return []string{"Syslog is not supported on Windows. Please use application logs instead by unchecking the 'Syslog' option."}
+		}
+
+		// Validate and sanitize count parameter
+		countInt, err := strconv.Atoi(count)
+		if err != nil || countInt < 1 || countInt > 10000 {
+			return []string{"Invalid count parameter - must be a number between 1 and 10000"}
+		}
+
+		// Validate level parameter - only allow valid syslog levels
+		validLevels := map[string]bool{
+			"0": true, "emerg": true,
+			"1": true, "alert": true,
+			"2": true, "crit": true,
+			"3": true, "err": true,
+			"4": true, "warning": true,
+			"5": true, "notice": true,
+			"6": true, "info": true,
+			"7": true, "debug": true,
+		}
+		if !validLevels[level] {
+			return []string{"Invalid level parameter - must be a valid syslog level"}
+		}
+
+		// Use hardcoded command with validated parameters
+		cmd := exec.Command("journalctl", "-u", "x-ui", "--no-pager", "-n", strconv.Itoa(countInt), "-p", level)
 		var out bytes.Buffer
 		cmd.Stdout = &out
-		err := cmd.Run()
+		err = cmd.Run()
 		if err != nil {
-			return []string{"Failed to run journalctl command!"}
+			return []string{"Failed to run journalctl command! Make sure systemd is available and x-ui service is registered."}
 		}
 		lines = strings.Split(out.String(), "\n")
 	} else {
@@ -441,7 +744,113 @@ func (s *ServerService) GetLogs(count string, level string, syslog string) []str
 	return lines
 }
 
-func (s *ServerService) GetConfigJson() (interface{}, error) {
+func (s *ServerService) GetXrayLogs(
+	count string,
+	filter string,
+	showDirect string,
+	showBlocked string,
+	showProxy string,
+	freedoms []string,
+	blackholes []string) []LogEntry {
+
+	const (
+		Direct = iota
+		Blocked
+		Proxied
+	)
+
+	countInt, _ := strconv.Atoi(count)
+	var entries []LogEntry
+
+	pathToAccessLog, err := xray.GetAccessLogPath()
+	if err != nil {
+		return nil
+	}
+
+	file, err := os.Open(pathToAccessLog)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		if line == "" || strings.Contains(line, "api -> api") {
+			//skipping empty lines and api calls
+			continue
+		}
+
+		if filter != "" && !strings.Contains(line, filter) {
+			//applying filter if it's not empty
+			continue
+		}
+
+		var entry LogEntry
+		parts := strings.Fields(line)
+
+		for i, part := range parts {
+
+			if i == 0 {
+				dateTime, err := time.Parse("2006/01/02 15:04:05.999999", parts[0]+" "+parts[1])
+				if err != nil {
+					continue
+				}
+				entry.DateTime = dateTime
+			}
+
+			if part == "from" {
+				entry.FromAddress = parts[i+1]
+			} else if part == "accepted" {
+				entry.ToAddress = parts[i+1]
+			} else if strings.HasPrefix(part, "[") {
+				entry.Inbound = part[1:]
+			} else if strings.HasSuffix(part, "]") {
+				entry.Outbound = part[:len(part)-1]
+			} else if part == "email:" {
+				entry.Email = parts[i+1]
+			}
+		}
+
+		if logEntryContains(line, freedoms) {
+			if showDirect == "false" {
+				continue
+			}
+			entry.Event = Direct
+		} else if logEntryContains(line, blackholes) {
+			if showBlocked == "false" {
+				continue
+			}
+			entry.Event = Blocked
+		} else {
+			if showProxy == "false" {
+				continue
+			}
+			entry.Event = Proxied
+		}
+
+		entries = append(entries, entry)
+	}
+
+	if len(entries) > countInt {
+		entries = entries[len(entries)-countInt:]
+	}
+
+	return entries
+}
+
+func logEntryContains(line string, suffixes []string) bool {
+	for _, sfx := range suffixes {
+		if strings.Contains(line, sfx+"]") {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *ServerService) GetConfigJson() (any, error) {
 	config, err := s.xrayService.GetXrayConfig()
 	if err != nil {
 		return nil, err
@@ -451,7 +860,7 @@ func (s *ServerService) GetConfigJson() (interface{}, error) {
 		return nil, err
 	}
 
-	var jsonData interface{}
+	var jsonData any
 	err = json.Unmarshal(contents, &jsonData)
 	if err != nil {
 		return nil, err
@@ -498,35 +907,43 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 		return common.NewErrorf("Error resetting file reader: %v", err)
 	}
 
-	// Save the file as temporary file
+	// Save the file as a temporary file
 	tempPath := fmt.Sprintf("%s.temp", config.GetDBPath())
-	// Remove the existing fallback file (if any) before creating one
-	_, err = os.Stat(tempPath)
-	if err == nil {
-		errRemove := os.Remove(tempPath)
-		if errRemove != nil {
+
+	// Remove the existing temporary file (if any)
+	if _, err := os.Stat(tempPath); err == nil {
+		if errRemove := os.Remove(tempPath); errRemove != nil {
 			return common.NewErrorf("Error removing existing temporary db file: %v", errRemove)
 		}
 	}
+
 	// Create the temporary file
 	tempFile, err := os.Create(tempPath)
 	if err != nil {
 		return common.NewErrorf("Error creating temporary db file: %v", err)
 	}
-	defer tempFile.Close()
 
-	// Remove temp file before returning
-	defer os.Remove(tempPath)
+	// Robust deferred cleanup for the temporary file
+	defer func() {
+		if tempFile != nil {
+			if cerr := tempFile.Close(); cerr != nil {
+				logger.Warningf("Warning: failed to close temp file: %v", cerr)
+			}
+		}
+		if _, err := os.Stat(tempPath); err == nil {
+			if rerr := os.Remove(tempPath); rerr != nil {
+				logger.Warningf("Warning: failed to remove temp file: %v", rerr)
+			}
+		}
+	}()
 
 	// Save uploaded file to temporary file
-	_, err = io.Copy(tempFile, file)
-	if err != nil {
+	if _, err = io.Copy(tempFile, file); err != nil {
 		return common.NewErrorf("Error saving db: %v", err)
 	}
 
-	// Check if we can init db or not
-	err = database.InitDB(tempPath)
-	if err != nil {
+	// Check if we can init the db or not
+	if err = database.InitDB(tempPath); err != nil {
 		return common.NewErrorf("Error checking db: %v", err)
 	}
 
@@ -535,54 +952,183 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 
 	// Backup the current database for fallback
 	fallbackPath := fmt.Sprintf("%s.backup", config.GetDBPath())
+
 	// Remove the existing fallback file (if any)
-	_, err = os.Stat(fallbackPath)
-	if err == nil {
-		errRemove := os.Remove(fallbackPath)
-		if errRemove != nil {
+	if _, err := os.Stat(fallbackPath); err == nil {
+		if errRemove := os.Remove(fallbackPath); errRemove != nil {
 			return common.NewErrorf("Error removing existing fallback db file: %v", errRemove)
 		}
 	}
+
 	// Move the current database to the fallback location
-	err = os.Rename(config.GetDBPath(), fallbackPath)
-	if err != nil {
-		return common.NewErrorf("Error backing up temporary db file: %v", err)
+	if err = os.Rename(config.GetDBPath(), fallbackPath); err != nil {
+		return common.NewErrorf("Error backing up current db file: %v", err)
 	}
 
-	// Remove the temporary file before returning
-	defer os.Remove(fallbackPath)
+	// Defer fallback cleanup ONLY if everything goes well
+	defer func() {
+		if _, err := os.Stat(fallbackPath); err == nil {
+			if rerr := os.Remove(fallbackPath); rerr != nil {
+				logger.Warningf("Warning: failed to remove fallback file: %v", rerr)
+			}
+		}
+	}()
 
 	// Move temp to DB path
-	err = os.Rename(tempPath, config.GetDBPath())
-	if err != nil {
-		errRename := os.Rename(fallbackPath, config.GetDBPath())
-		if errRename != nil {
+	if err = os.Rename(tempPath, config.GetDBPath()); err != nil {
+		// Restore from fallback
+		if errRename := os.Rename(fallbackPath, config.GetDBPath()); errRename != nil {
 			return common.NewErrorf("Error moving db file and restoring fallback: %v", errRename)
 		}
 		return common.NewErrorf("Error moving db file: %v", err)
 	}
 
 	// Migrate DB
-	err = database.InitDB(config.GetDBPath())
-	if err != nil {
-		errRename := os.Rename(fallbackPath, config.GetDBPath())
-		if errRename != nil {
+	if err = database.InitDB(config.GetDBPath()); err != nil {
+		if errRename := os.Rename(fallbackPath, config.GetDBPath()); errRename != nil {
 			return common.NewErrorf("Error migrating db and restoring fallback: %v", errRename)
 		}
 		return common.NewErrorf("Error migrating db: %v", err)
 	}
+
 	s.inboundService.MigrateDB()
 
 	// Start Xray
-	err = s.RestartXrayService()
-	if err != nil {
-		return common.NewErrorf("Imported DB but Failed to start Xray: %v", err)
+	if err = s.RestartXrayService(); err != nil {
+		return common.NewErrorf("Imported DB but failed to start Xray: %v", err)
 	}
 
 	return nil
 }
 
-func (s *ServerService) GetNewX25519Cert() (interface{}, error) {
+// IsValidGeofileName validates that the filename is safe for geofile operations.
+// It checks for path traversal attempts and ensures the filename contains only safe characters.
+func (s *ServerService) IsValidGeofileName(filename string) bool {
+	if filename == "" {
+		return false
+	}
+
+	// Check for path traversal attempts
+	if strings.Contains(filename, "..") {
+		return false
+	}
+
+	// Check for path separators (both forward and backward slash)
+	if strings.ContainsAny(filename, `/\`) {
+		return false
+	}
+
+	// Check for absolute path indicators
+	if filepath.IsAbs(filename) {
+		return false
+	}
+
+	// Additional security: only allow alphanumeric, dots, underscores, and hyphens
+	// This is stricter than the general filename regex
+	validGeofilePattern := `^[a-zA-Z0-9._-]+\.dat$`
+	matched, _ := regexp.MatchString(validGeofilePattern, filename)
+	return matched
+}
+
+func (s *ServerService) UpdateGeofile(fileName string) error {
+	files := []struct {
+		URL      string
+		FileName string
+	}{
+		{"https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat", "geoip.dat"},
+		{"https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat", "geosite.dat"},
+		{"https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat", "geoip_IR.dat"},
+		{"https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat", "geosite_IR.dat"},
+		{"https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat", "geoip_RU.dat"},
+		{"https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat", "geosite_RU.dat"},
+	}
+
+	// Strict allowlist check to avoid writing uncontrolled files
+	if fileName != "" {
+		// Use the centralized validation function
+		if !s.IsValidGeofileName(fileName) {
+			return common.NewErrorf("Invalid geofile name: contains unsafe path characters: %s", fileName)
+		}
+
+		// Ensure the filename matches exactly one from our allowlist
+		isAllowed := false
+		for _, file := range files {
+			if fileName == file.FileName {
+				isAllowed = true
+				break
+			}
+		}
+		if !isAllowed {
+			return common.NewErrorf("Invalid geofile name: %s not in allowlist", fileName)
+		}
+	}
+	downloadFile := func(url, destPath string) error {
+		resp, err := http.Get(url)
+		if err != nil {
+			return common.NewErrorf("Failed to download Geofile from %s: %v", url, err)
+		}
+		defer resp.Body.Close()
+
+		file, err := os.Create(destPath)
+		if err != nil {
+			return common.NewErrorf("Failed to create Geofile %s: %v", destPath, err)
+		}
+		defer file.Close()
+
+		_, err = io.Copy(file, resp.Body)
+		if err != nil {
+			return common.NewErrorf("Failed to save Geofile %s: %v", destPath, err)
+		}
+
+		return nil
+	}
+
+	var errorMessages []string
+
+	if fileName == "" {
+		for _, file := range files {
+			// Sanitize the filename from our allowlist as an extra precaution
+			destPath := filepath.Join(config.GetBinFolderPath(), filepath.Base(file.FileName))
+
+			if err := downloadFile(file.URL, destPath); err != nil {
+				errorMessages = append(errorMessages, fmt.Sprintf("Error downloading Geofile '%s': %v", file.FileName, err))
+			}
+		}
+	} else {
+		// Use filepath.Base to ensure we only get the filename component, no path traversal
+		safeName := filepath.Base(fileName)
+		destPath := filepath.Join(config.GetBinFolderPath(), safeName)
+
+		var fileURL string
+		for _, file := range files {
+			if file.FileName == fileName {
+				fileURL = file.URL
+				break
+			}
+		}
+
+		if fileURL == "" {
+			errorMessages = append(errorMessages, fmt.Sprintf("File '%s' not found in the list of Geofiles", fileName))
+		} else {
+			if err := downloadFile(fileURL, destPath); err != nil {
+				errorMessages = append(errorMessages, fmt.Sprintf("Error downloading Geofile '%s': %v", fileName, err))
+			}
+		}
+	}
+
+	err := s.RestartXrayService()
+	if err != nil {
+		errorMessages = append(errorMessages, fmt.Sprintf("Updated Geofile '%s' but Failed to start Xray: %v", fileName, err))
+	}
+
+	if len(errorMessages) > 0 {
+		return common.NewErrorf("%s", strings.Join(errorMessages, "\r\n"))
+	}
+
+	return nil
+}
+
+func (s *ServerService) GetNewX25519Cert() (any, error) {
 	// Run the command
 	cmd := exec.Command(xray.GetBinaryPath(), "x25519")
 	var out bytes.Buffer
@@ -600,9 +1146,136 @@ func (s *ServerService) GetNewX25519Cert() (interface{}, error) {
 	privateKey := strings.TrimSpace(privateKeyLine[1])
 	publicKey := strings.TrimSpace(publicKeyLine[1])
 
-	keyPair := map[string]interface{}{
+	keyPair := map[string]any{
 		"privateKey": privateKey,
 		"publicKey":  publicKey,
+	}
+
+	return keyPair, nil
+}
+
+func (s *ServerService) GetNewmldsa65() (any, error) {
+	// Run the command
+	cmd := exec.Command(xray.GetBinaryPath(), "mldsa65")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(out.String(), "\n")
+
+	SeedLine := strings.Split(lines[0], ":")
+	VerifyLine := strings.Split(lines[1], ":")
+
+	seed := strings.TrimSpace(SeedLine[1])
+	verify := strings.TrimSpace(VerifyLine[1])
+
+	keyPair := map[string]any{
+		"seed":   seed,
+		"verify": verify,
+	}
+
+	return keyPair, nil
+}
+
+func (s *ServerService) GetNewEchCert(sni string) (interface{}, error) {
+	// Run the command
+	cmd := exec.Command(xray.GetBinaryPath(), "tls", "ech", "--serverName", sni)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(out.String(), "\n")
+	if len(lines) < 4 {
+		return nil, common.NewError("invalid ech cert")
+	}
+
+	configList := lines[1]
+	serverKeys := lines[3]
+
+	return map[string]interface{}{
+		"echServerKeys": serverKeys,
+		"echConfigList": configList,
+	}, nil
+}
+
+func (s *ServerService) GetNewVlessEnc() (any, error) {
+	cmd := exec.Command(xray.GetBinaryPath(), "vlessenc")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(out.String(), "\n")
+	var auths []map[string]string
+	var current map[string]string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Authentication:") {
+			if current != nil {
+				auths = append(auths, current)
+			}
+			current = map[string]string{
+				"label": strings.TrimSpace(strings.TrimPrefix(line, "Authentication:")),
+			}
+		} else if strings.HasPrefix(line, `"decryption"`) || strings.HasPrefix(line, `"encryption"`) {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 && current != nil {
+				key := strings.Trim(parts[0], `" `)
+				val := strings.Trim(parts[1], `" `)
+				current[key] = val
+			}
+		}
+	}
+
+	if current != nil {
+		auths = append(auths, current)
+	}
+
+	return map[string]any{
+		"auths": auths,
+	}, nil
+}
+
+func (s *ServerService) GetNewUUID() (map[string]string, error) {
+	newUUID, err := uuid.NewRandom()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate UUID: %w", err)
+	}
+
+	return map[string]string{
+		"uuid": newUUID.String(),
+	}, nil
+}
+
+func (s *ServerService) GetNewmlkem768() (any, error) {
+	// Run the command
+	cmd := exec.Command(xray.GetBinaryPath(), "mlkem768")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(out.String(), "\n")
+
+	SeedLine := strings.Split(lines[0], ":")
+	ClientLine := strings.Split(lines[1], ":")
+
+	seed := strings.TrimSpace(SeedLine[1])
+	client := strings.TrimSpace(ClientLine[1])
+
+	keyPair := map[string]any{
+		"seed":   seed,
+		"client": client,
 	}
 
 	return keyPair, nil

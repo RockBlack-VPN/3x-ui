@@ -8,15 +8,17 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"time"
 
-	"x-ui/database"
-	"x-ui/database/model"
-	"x-ui/logger"
-	"x-ui/xray"
+	"github.com/mhsanaei/3x-ui/v2/database"
+	"github.com/mhsanaei/3x-ui/v2/database/model"
+	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/xray"
 )
 
+// CheckClientIpJob monitors client IP addresses from access logs and manages IP blocking based on configured limits.
 type CheckClientIpJob struct {
 	lastClear     int64
 	disAllowedIps []string
@@ -24,6 +26,7 @@ type CheckClientIpJob struct {
 
 var job *CheckClientIpJob
 
+// NewCheckClientIpJob creates a new client IP monitoring job instance.
 func NewCheckClientIpJob() *CheckClientIpJob {
 	job = new(CheckClientIpJob)
 	return job
@@ -39,12 +42,20 @@ func (j *CheckClientIpJob) Run() {
 	f2bInstalled := j.checkFail2BanInstalled()
 	isAccessLogAvailable := j.checkAccessLogAvailable(iplimitActive)
 
-	if iplimitActive {
-		if f2bInstalled && isAccessLogAvailable {
-			shouldClearAccessLog = j.processLogFile()
+	if isAccessLogAvailable {
+		if runtime.GOOS == "windows" {
+			if iplimitActive {
+				shouldClearAccessLog = j.processLogFile()
+			}
 		} else {
-			if !f2bInstalled {
-				logger.Warning("[LimitIP] Fail2Ban is not installed, Please install Fail2Ban from the x-ui bash menu.")
+			if iplimitActive {
+				if f2bInstalled {
+					shouldClearAccessLog = j.processLogFile()
+				} else {
+					if !f2bInstalled {
+						logger.Warning("[LimitIP] Fail2Ban is not installed, Please install Fail2Ban from the x-ui bash menu.")
+					}
+				}
 			}
 		}
 	}
@@ -57,21 +68,21 @@ func (j *CheckClientIpJob) Run() {
 func (j *CheckClientIpJob) clearAccessLog() {
 	logAccessP, err := os.OpenFile(xray.GetAccessPersistentLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	j.checkError(err)
+	defer logAccessP.Close()
 
 	accessLogPath, err := xray.GetAccessLogPath()
 	j.checkError(err)
 
 	file, err := os.Open(accessLogPath)
 	j.checkError(err)
+	defer file.Close()
 
 	_, err = io.Copy(logAccessP, file)
 	j.checkError(err)
 
-	logAccessP.Close()
-	file.Close()
-
 	err = os.Truncate(accessLogPath, 0)
 	j.checkError(err)
+
 	j.lastClear = time.Now().Unix()
 }
 
@@ -190,16 +201,6 @@ func (j *CheckClientIpJob) checkError(e error) {
 	if e != nil {
 		logger.Warning("client ip job err:", e)
 	}
-}
-
-func (j *CheckClientIpJob) contains(s []string, str string) bool {
-	for _, v := range s {
-		if v == str {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (j *CheckClientIpJob) getInboundClientIps(clientEmail string) (*model.InboundClientIps, error) {
