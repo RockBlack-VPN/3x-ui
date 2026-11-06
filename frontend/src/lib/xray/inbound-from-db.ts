@@ -18,9 +18,14 @@ export interface DbInboundLike {
   up?: number;
   down?: number;
   total?: number;
+  shareAddrStrategy?: string;
+  shareAddr?: string;
 }
 
-function fillProtocolSettingsDefaults(protocol: string, settings: Record<string, unknown>): Record<string, unknown> {
+function fillProtocolSettingsDefaults(
+  protocol: string,
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
   const parsed = InboundSettingsSchema.safeParse({ protocol, settings });
   if (parsed.success) {
     const tagged = parsed.data as { settings: Record<string, unknown> };
@@ -34,9 +39,10 @@ export function inboundFromDb(raw: DbInboundLike): Inbound {
   const settings = fillProtocolSettingsDefaults(raw.protocol, rawSettings);
   const streamSettingsRaw = coerceInboundJsonField(raw.streamSettings);
   const sniffing = coerceInboundJsonField(raw.sniffing);
-  const streamSettings = Object.keys(streamSettingsRaw).length === 0
-    ? streamSettingsRaw
-    : fillStreamDefaults(streamSettingsRaw);
+  const streamSettings =
+    Object.keys(streamSettingsRaw).length === 0
+      ? streamSettingsRaw
+      : fillStreamDefaults(streamSettingsRaw);
   return {
     protocol: raw.protocol,
     port: raw.port,
@@ -48,6 +54,8 @@ export function inboundFromDb(raw: DbInboundLike): Inbound {
     up: raw.up ?? 0,
     down: raw.down ?? 0,
     total: raw.total ?? 0,
+    shareAddrStrategy: raw.shareAddrStrategy ?? 'node',
+    shareAddr: raw.shareAddr ?? '',
     settings,
     streamSettings,
     sniffing,

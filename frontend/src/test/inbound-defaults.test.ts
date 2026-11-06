@@ -9,6 +9,8 @@ import {
   createDefaultShadowsocksInboundSettings,
   createDefaultTrojanClient,
   createDefaultTrojanInboundSettings,
+  createDefaultTuicClient,
+  createDefaultTuicInboundSettings,
   createDefaultTunnelInboundSettings,
   createDefaultVlessClient,
   createDefaultVlessInboundSettings,
@@ -16,11 +18,26 @@ import {
   createDefaultVmessInboundSettings,
   createDefaultWireguardInboundSettings,
 } from '@/lib/xray/inbound-defaults';
+import {
+  createHysteriaTlsSettingsWithDefaultCert,
+  createTlsSettingsWithDefaultCert,
+} from '@/lib/xray/inbound-tls-defaults';
 import { HttpInboundSettingsSchema } from '@/schemas/protocols/inbound/http';
-import { HysteriaClientSchema, HysteriaInboundSettingsSchema } from '@/schemas/protocols/inbound/hysteria';
+import {
+  HysteriaClientSchema,
+  HysteriaInboundSettingsSchema,
+} from '@/schemas/protocols/inbound/hysteria';
+import { TlsStreamSettingsSchema } from '@/schemas/protocols/security/tls';
 import { MixedInboundSettingsSchema } from '@/schemas/protocols/inbound/mixed';
-import { ShadowsocksClientSchema, ShadowsocksInboundSettingsSchema } from '@/schemas/protocols/inbound/shadowsocks';
-import { TrojanClientSchema, TrojanInboundSettingsSchema } from '@/schemas/protocols/inbound/trojan';
+import {
+  ShadowsocksClientSchema,
+  ShadowsocksInboundSettingsSchema,
+} from '@/schemas/protocols/inbound/shadowsocks';
+import {
+  TrojanClientSchema,
+  TrojanInboundSettingsSchema,
+} from '@/schemas/protocols/inbound/trojan';
+import { TuicClientSchema, TuicInboundSettingsSchema } from '@/schemas/protocols/inbound/tuic';
 import { TunnelInboundSettingsSchema } from '@/schemas/protocols/inbound/tunnel';
 import { VlessClientSchema, VlessInboundSettingsSchema } from '@/schemas/protocols/inbound/vless';
 import { VmessClientSchema, VmessInboundSettingsSchema } from '@/schemas/protocols/inbound/vmess';
@@ -76,6 +93,17 @@ describe('createDefaultHysteriaClient', () => {
     const c = createDefaultHysteriaClient({ ...seed, auth: 'fixed-hyst-auth' });
     expect(c).toMatchSnapshot();
     expect(HysteriaClientSchema.parse(c)).toEqual(c);
+  });
+});
+
+describe('createDefaultTuicClient', () => {
+  it('produces a Zod-valid client', () => {
+    const c = createDefaultTuicClient({
+      ...seed,
+      uuid: '11111111-2222-3333-4444-555555555555',
+      password: 'fixed-tuic-pw',
+    });
+    expect(TuicClientSchema.parse(c)).toEqual(c);
   });
 });
 
@@ -141,9 +169,88 @@ describe('createDefault*InboundSettings factories', () => {
   it('wireguard', () => {
     const s = createDefaultWireguardInboundSettings({
       secretKey: 'QGVlb2dXc1ZTWGw0ZXBzZndsWmtMaUM5MUlNYjBHWFdYbz0=',
-      peerPrivateKey: 'cGVlci1maXh0dXJlLXByaXZhdGUta2V5LWZvci10ZXN0cw==',
     });
     expect(s).toMatchSnapshot();
     expect(WireguardInboundSettingsSchema.parse(s)).toEqual(s);
+    expect(s.peers).toEqual([]);
+    expect(s.clients).toEqual([]);
+  });
+
+  it('tuic', () => {
+    const s = createDefaultTuicInboundSettings();
+    expect(TuicInboundSettingsSchema.parse(s)).toEqual(s);
+  });
+});
+
+describe('TuicInboundSettingsSchema', () => {
+  it('canonicalizes congestion-controller aliases and casing', () => {
+    expect(
+      TuicInboundSettingsSchema.parse({ server: { congestion_control: 'RENO' } }).server
+        ?.congestion_control,
+    ).toBe('new_reno');
+    expect(
+      TuicInboundSettingsSchema.parse({ server: { congestion_control: ' CuBiC ' } }).server
+        ?.congestion_control,
+    ).toBe('cubic');
+    expect(
+      TuicInboundSettingsSchema.parse({ server: { congestion_control: '' } }).server
+        ?.congestion_control,
+    ).toBe('bbr');
+    expect(
+      TuicInboundSettingsSchema.parse({ server: { congestion_control: '  ' } }).server
+        ?.congestion_control,
+    ).toBe('bbr');
+    expect(
+      TuicInboundSettingsSchema.parse({ congestion_control: ' CuBiC ' }).congestion_control,
+    ).toBe('cubic');
+    expect(
+      TuicInboundSettingsSchema.parse({ congestion_control: 'invalid' }).congestion_control,
+    ).toBe('new_reno');
+  });
+
+  it('clamps legacy packet-size values to the SOCKS-safe UDP payload maximum', () => {
+    expect(
+      TuicInboundSettingsSchema.parse({ server: { max_udp_relay_packet_size: 65507 } }).server
+        ?.max_udp_relay_packet_size,
+    ).toBe(65245);
+    expect(
+      TuicInboundSettingsSchema.parse({ max_udp_relay_packet_size: 65500 })
+        .max_udp_relay_packet_size,
+    ).toBe(65245);
+    expect(() =>
+      TuicInboundSettingsSchema.parse({ server: { max_udp_relay_packet_size: 65508 } }),
+    ).toThrow();
+    expect(() => TuicInboundSettingsSchema.parse({ max_udp_relay_packet_size: 65508 })).toThrow();
+  });
+});
+
+describe('createHysteriaTlsSettingsWithDefaultCert', () => {
+  it('defaults Hysteria TLS to uTLS None and h3 ALPN', () => {
+    const tls = createHysteriaTlsSettingsWithDefaultCert();
+    expect(tls.alpn).toEqual(['h3']);
+    expect((tls.settings as Record<string, unknown>).fingerprint).toBe('');
+    expect(tls.certificates).toEqual([
+      expect.objectContaining({
+        useFile: true,
+        certificateFile: '',
+        keyFile: '',
+      }),
+    ]);
+  });
+});
+
+describe('createTlsSettingsWithDefaultCert', () => {
+  it('keeps the schema ALPN default for non-WebSocket transports', () => {
+    for (const network of [undefined, '', 'tcp', 'kcp', 'grpc', 'httpupgrade', 'xhttp']) {
+      const tls = createTlsSettingsWithDefaultCert(network);
+      expect(tls.alpn).toEqual(['h2', 'http/1.1']);
+    }
+  });
+
+  it('defaults ALPN to http/1.1 for WebSocket (issue #6782)', () => {
+    const tls = createTlsSettingsWithDefaultCert('ws');
+    expect(tls.alpn).toEqual(['http/1.1']);
+    // The overridden value must still satisfy the TLS settings schema.
+    expect(TlsStreamSettingsSchema.parse(tls).alpn).toEqual(['http/1.1']);
   });
 });

@@ -3,7 +3,7 @@
 React 19 + Ant Design 6 + TypeScript + Vite 8. Three SPA bundles —
 `index.html` (admin panel SPA, all `/panel/*` routes), `login.html`
 (login + 2FA), and `subpage.html` (public subscription viewer). All
-three are built into `../web/dist/` and embedded into the Go binary
+three are built into `../internal/web/dist/` and embedded into the Go binary
 via `embed.FS`.
 
 State is split between local `useState`, TanStack Query for server
@@ -30,17 +30,49 @@ production-style links work without round-tripping through Go.
 | Command | What |
 |---|---|
 | `npm run dev` | Vite dev server with API + WS proxy to Go |
-| `npm run build` | Regenerates OpenAPI + Zod, then builds into `../web/dist/` |
+| `npm run build` | Regenerates the OpenAPI spec, then builds into `../internal/web/dist/` |
 | `npm run preview` | Serve the built bundle locally |
 | `npm run typecheck` | `tsc --noEmit` (strict, no emit) |
-| `npm run lint` | ESLint flat config (`@typescript-eslint` + `react-hooks`) |
+| `npm run lint` | oxlint over `src/` + `tools/` (`.oxlintrc.json`) |
+| `npm run lint:deprecated` | Type-aware sweep for JSDoc `@deprecated` APIs (on demand) |
+| `npm run format` | oxfmt (`.oxfmtrc.json`) — rewrites `src/` + `tools/` in place |
+| `npm run format:check` | oxfmt in check mode (no writes) |
 | `npm run test` | Vitest single run (schema fixtures, link parsers, …) |
 | `npm run test:watch` | Vitest watch mode |
+| `npm run storybook` | Storybook dev server on `:6006` (component workbench + autodocs) |
+| `npm run build-storybook` | Static Storybook build — CI compile-checks every story |
 | `npm run gen:api` | Build `public/openapi.json` from `pages/api-docs/endpoints.ts` |
-| `npm run gen:zod` | Run the Go-side openapigen tool → `src/generated/{zod,types}.ts` |
+| `npm run gen:zod` | Run the Go-side openapigen tool → `src/generated/{zod,types,schemas,examples}.ts` |
 
-CI runs `typecheck`, `lint`, `test`, and `build` on every PR
-(see `../.github/workflows/ci.yml`).
+CI runs `typecheck`, `lint`, `format:check`, `test`, `build`, and
+`build-storybook` on every PR (see `../.github/workflows/ci.yml`).
+
+### Inbound accessibility verification
+
+`npm test` includes the real inbound form and native-select regression fixtures.
+After `npm run build-storybook`, serve the built stories with
+`npx vite preview --outDir storybook-static --host 127.0.0.1 --port 6006` and, in
+another terminal, run `node tools/check-inbound-keyboard.mjs`. CI runs this check
+too. It uses real Chromium Tab/Arrow/Enter input, checks native selected values
+in the accessibility tree, captures create/edit requests, and verifies focus
+containment and return. Its HTTP boundary is stubbed; backend configuration
+generation and server validation are unchanged.
+
+Mobile viewport emulation and accessibility-tree checks do not prove TalkBack
+or NVDA compatibility. On actual Android TalkBack/Chrome and Windows NVDA:
+
+1. Open Add Inbound, explore Protocol, open the native picker, choose Shadowsocks
+   and confirm the control announces its selected value. Cancel another picker
+   and confirm the value and focus stay unchanged.
+2. Visit Protocol, select an encryption method, then Stream; choose RAW,
+   WebSocket, gRPC and XHTTP and verify the dependent fields and their labels.
+3. Check Security's None/TLS/REALITY radios; try certificate/uTLS selections and
+   the ALPN multi-select, searchable node/fallback fields, clearing and custom tags.
+4. Trigger a custom-share-address validation error from another tab. Confirm
+   the form reveals/focuses the field and reads its hint/error. Correct it and save.
+5. Edit the inbound, confirm Protocol remains disabled, save a transport change,
+   and close/reopen with keyboard and touch exploration. Focus must return to
+   the opener and Tab/Shift+Tab must stay inside the open dialog.
 
 ### One-off: scan for deprecated APIs
 
@@ -49,12 +81,13 @@ with the JSDoc `@deprecated` tag (AntD prop renames, Zod renames,
 removed Web APIs, etc.):
 
 ```sh
-npx eslint --config eslint.deprecated.config.js src
+npm run lint:deprecated
 ```
 
-It's a type-aware ESLint run against `eslint.deprecated.config.js`
-and is not wired into `npm run lint` because typed linting triples
-the wall-clock time.
+It is oxlint's type-aware mode (`oxlint-tsgolint`, which drives the
+TypeScript 7 `typescript-go` checker) narrowed to `no-deprecated`, and
+is not wired into `npm run lint` because typed linting needs a full
+type-check pass.
 
 ## Production build
 
@@ -62,11 +95,20 @@ the wall-clock time.
 npm run build
 ```
 
-Outputs to `../web/dist/` (HTML at the root, hashed JS/CSS under
+Outputs to `../internal/web/dist/` (HTML at the root, hashed JS/CSS under
 `assets/`). `manualChunks` splits AntD, icons, codemirror, and
 react-query into separate vendor bundles to keep the per-page
 initial JS small. The Go binary embeds this directory at compile
-time and `web/controller/dist.go` serves the per-page HTML.
+time and `internal/web/controller/dist.go` serves the per-page HTML.
+
+### PWA mode
+
+The login and panel pages expose a minimal network-only Progressive Web App.
+The manifest, service worker, registration script, and icons are embedded with
+the frontend and served under the runtime `webBasePath`. The service worker
+does not use Cache Storage, does not intercept requests, and does not provide
+offline access; panel authentication, API calls, and WebSocket traffic remain
+normal network requests.
 
 ## Layout
 
@@ -74,11 +116,15 @@ time and `web/controller/dist.go` serves the per-page HTML.
 frontend/
 ├── index.html, login.html, subpage.html  # 3 Vite entries
 ├── tsconfig.json
-├── eslint.config.js
-├── eslint.deprecated.config.js           # On-demand type-aware lint config that flags
-│                                         #   usages of APIs marked with JSDoc @deprecated
+├── .oxlintrc.json                        # oxlint config (replaces the ESLint flat config)
+├── .oxfmtrc.json                         # oxfmt config (Prettier-compatible settings)
+├── tools/oxlint/
+│   └── input-number-guard.mjs            # oxlint JS plugin: the #6121/#6127 cleared-
+│                                         #   InputNumber guard (oxlint has no
+│                                         #   no-restricted-syntax)
 ├── vitest.config.ts
 ├── vite.config.js
+├── .storybook/                           # Storybook config (main.ts, preview.tsx)
 ├── scripts/
 │   └── build-openapi.mjs                 # endpoints.ts → openapi.json
 └── src/
@@ -89,18 +135,18 @@ frontend/
     │   ├── index/, login/, inbounds/, clients/, xray/, nodes/,
     │   ├── settings/, api-docs/, sub/
     ├── layouts/         # AdminLayout (sidebar + header + outlet)
-    ├── components/      # Cross-page React components
+    ├── components/      # Cross-page React components (+ co-located *.stories.tsx)
     ├── hooks/           # useClients, useTheme, useWebSocket, …
-    ├── api/             # Axios + CSRF interceptor, TanStack Query bridge,
+    ├── api/             # fetch client + CSRF handling, TanStack Query bridge,
     │                    #   WebSocket client + queryClient.ts
-    ├── i18n/            # react-i18next init (locales in web/translation/)
+    ├── i18n/            # react-i18next init (locales in internal/web/translation/)
     ├── lib/xray/        # Pure functions: link generation, defaults,
     │                    #   form ⇄ wire adapters, protocol capabilities
     ├── schemas/         # Zod source-of-truth (see "Schemas" below)
     ├── generated/       # Code-generated zod + ts types from Go
     │                    #   (DO NOT hand-edit — regenerated by gen:zod)
     ├── models/          # Thin legacy types still in transit
-    │                    #   (DBInbound, Status, AllSetting, reality-targets)
+    │                    #   (DBInbound, Status, AllSetting)
     ├── styles/          # Shared CSS modules
     ├── test/            # Vitest specs + golden fixtures
     │   ├── *.test.ts
@@ -137,37 +183,40 @@ Patterns:
   security.
 - **Three validation layers**, non-overlapping:
   - API boundary: `parseMsg(msg, schema, ctx)` inside TanStack
-    Query `queryFn` — warn-only in prod, throws in dev
-  - Form input: `antdRule(schema.shape.field)` on every `<Form.Item>` —
-    blocks submit + per-field inline error
+    Query `queryFn` — warns on a mismatch and returns the payload; pass
+    `{ strict: true }` to throw instead
+  - Form input: `rules={{ validate: rhfZodValidate(schema.shape.field) }}` on
+    every `FormField` — blocks submit + per-field inline error
   - Wire request: `Schema.parse(payload)` inside `mutationFn` — throws,
     because a malformed payload here is always a developer bug
 - **No `.loose()` or `[key: string]: any`** in production schemas.
-  `@typescript-eslint/no-explicit-any: error` is enforced.
+  `typescript/no-explicit-any: error` is enforced by oxlint.
 
 ## Form pattern (Pattern A)
 
-All non-trivial modals use this single pattern:
+All non-trivial modals use this single pattern — React Hook Form for the
+state, AntD's `<Form>` only as the layout:
 
 ```tsx
-const [form] = Form.useForm<InboundFormValues>();
+const form = useForm<InboundFormValues>({ defaultValues: initialValues });
 
-const onFinish = async () => {
-  const values = await form.validateFields();
-  await createInbound.mutateAsync(values);
-};
+const onSubmit = (values: InboundFormValues) => createInbound.mutateAsync(values);
 
-<Form form={form} onFinish={onFinish}>
-  <Form.Item
-    name="port"
-    label="Port"
-    rules={[antdRule(InboundFormSchema.shape.port, t)]}
-  >
-    <InputNumber min={1} max={65535} />
-  </Form.Item>
-</Form>
+<FormProvider {...form}>
+  <Form layout="vertical" onFinish={form.handleSubmit(onSubmit)}>
+    <FormField
+      name="port"
+      label={t('pages.inbounds.port')}
+      rules={{ validate: rhfZodValidate(InboundFormSchema.shape.port) }}
+    >
+      <InputNumber min={1} max={65535} />
+    </FormField>
+  </Form>
+</FormProvider>
 ```
 
+`FormField` (from `@/components/form/rhf`) bridges a React Hook Form
+`Controller` to an AntD input and renders the field's error as help text.
 No `safeParse`-on-submit handlers, no `useRef<any>` for form
 references, no inline `z.string().min(1)` in rules. Conditional
 fields use `<Form.Item dependencies={...} shouldUpdate>` with the
@@ -186,6 +235,36 @@ npx vitest run -u
 
 Fixtures live in `src/test/golden/fixtures/` and are auto-discovered
 via `import.meta.glob`.
+
+## Storybook
+
+Reusable components in `src/components/` are developed and documented in
+**Storybook** (`@storybook/react-vite`). It is a component workbench, not part
+of the shipped panel — nothing here is embedded into the Go binary. The built
+Storybook is published with the docs site at
+[docs.sanaei.dev/storybook](https://docs.sanaei.dev/storybook/) by
+`.github/workflows/docs-deploy.yml`.
+
+```sh
+npm run storybook        # dev server on http://localhost:6006
+npm run build-storybook  # static build; CI runs this to compile-check every story
+```
+
+Addons: `@storybook/addon-docs` renders an autodocs page per component,
+`@storybook/addon-a11y` flags accessibility issues in the canvas, and
+`@storybook/addon-vitest` runs every story as a headless-browser test under
+`npm run test` (Playwright/Chromium — run `npx playwright install chromium` once
+locally). The `.storybook/preview.tsx` decorator wraps every story in the AntD
+`ConfigProvider` and adds a light/dark theme toggle to the toolbar.
+
+Conventions for a story:
+
+- Co-locate it with its component as `<Component>.stories.tsx`.
+- Set `tags: ['autodocs']` so it gets a generated docs page.
+- Document props via story metadata, not JSDoc (the repo bans `//` comments): a
+  component summary in `parameters.docs.description.component` and per-prop text
+  in `argTypes[prop].description`. `satisfies Meta<typeof Component>` keeps the
+  metadata type-checked.
 
 ## Adding a new page
 

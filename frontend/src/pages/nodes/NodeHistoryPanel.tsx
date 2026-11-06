@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HttpUtil } from '@/utils';
-import Sparkline from '@/components/Sparkline';
+import { Sparkline } from '@/components/viz';
 import './NodeHistoryPanel.css';
 
 interface NodeRef {
@@ -25,12 +25,18 @@ interface ApiMsg<T = unknown> {
 
 const REFRESH_MS = 15000;
 
+const formatKbps = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 1 });
+
 export default function NodeHistoryPanel({ node, bucket = 30 }: NodeHistoryPanelProps) {
   const { t } = useTranslation();
   const [cpuPoints, setCpuPoints] = useState<number[]>([]);
   const [cpuLabels, setCpuLabels] = useState<string[]>([]);
   const [memPoints, setMemPoints] = useState<number[]>([]);
   const [memLabels, setMemLabels] = useState<string[]>([]);
+  const [netUpPoints, setNetUpPoints] = useState<number[]>([]);
+  const [netUpLabels, setNetUpLabels] = useState<string[]>([]);
+  const [netDownPoints, setNetDownPoints] = useState<number[]>([]);
+  const [netDownLabels, setNetDownLabels] = useState<string[]>([]);
 
   const lastNodeId = useRef<number>(node.id);
 
@@ -46,16 +52,19 @@ export default function NodeHistoryPanel({ node, bucket = 30 }: NodeHistoryPanel
       return `${hh}:${mm}:${ss}`;
     };
 
-    const fetchSeries = async (metric: 'cpu' | 'mem') => {
+    // cpu/mem are percentages (clamp 0-100); net throughput is bytes/sec shown
+    // as KB/s, which must opt out of Sparkline's 0-100 "%" defaults.
+    const fetchSeries = async (metric: string, kind: 'pct' | 'rate') => {
       try {
         const url = `/panel/api/nodes/history/${node.id}/${metric}/${bucket}`;
-        const msg = await HttpUtil.get(url) as ApiMsg<SeriesPoint[]>;
+        const msg = (await HttpUtil.get(url)) as ApiMsg<SeriesPoint[]>;
         if (msg?.success && Array.isArray(msg.obj)) {
           const vals: number[] = [];
           const labs: string[] = [];
           for (const p of msg.obj) {
             labs.push(bucketLabel(p.t));
-            vals.push(Math.max(0, Math.min(100, Number(p.v) || 0)));
+            const n = Number(p.v) || 0;
+            vals.push(kind === 'pct' ? Math.max(0, Math.min(100, n)) : Math.max(0, n / 1024));
           }
           return { vals, labs };
         }
@@ -66,12 +75,21 @@ export default function NodeHistoryPanel({ node, bucket = 30 }: NodeHistoryPanel
     };
 
     const refresh = async () => {
-      const [cpu, mem] = await Promise.all([fetchSeries('cpu'), fetchSeries('mem')]);
+      const [cpu, mem, netUp, netDown] = await Promise.all([
+        fetchSeries('cpu', 'pct'),
+        fetchSeries('mem', 'pct'),
+        fetchSeries('netUp', 'rate'),
+        fetchSeries('netDown', 'rate'),
+      ]);
       if (cancelled) return;
       setCpuPoints(cpu.vals);
       setCpuLabels(cpu.labs);
       setMemPoints(mem.vals);
       setMemLabels(mem.labs);
+      setNetUpPoints(netUp.vals);
+      setNetUpLabels(netUp.labs);
+      setNetDownPoints(netDown.vals);
+      setNetDownLabels(netDown.labs);
     };
 
     refresh();
@@ -116,6 +134,42 @@ export default function NodeHistoryPanel({ node, bucket = 30 }: NodeHistoryPanel
           fillOpacity={0.18}
           markerRadius={2.6}
           showTooltip
+        />
+      </div>
+      <div className="series">
+        <div className="series-title">{t('pages.nodes.netUp')}</div>
+        <Sparkline
+          data={netUpPoints}
+          labels={netUpLabels}
+          height={120}
+          stroke="#1677ff"
+          showGrid
+          showAxes
+          tickCountX={4}
+          maxPoints={netUpPoints.length || 1}
+          fillOpacity={0.18}
+          markerRadius={2.6}
+          showTooltip
+          valueMax={null}
+          yFormatter={formatKbps}
+        />
+      </div>
+      <div className="series">
+        <div className="series-title">{t('pages.nodes.netDown')}</div>
+        <Sparkline
+          data={netDownPoints}
+          labels={netDownLabels}
+          height={120}
+          stroke="#fa8c16"
+          showGrid
+          showAxes
+          tickCountX={4}
+          maxPoints={netDownPoints.length || 1}
+          fillOpacity={0.18}
+          markerRadius={2.6}
+          showTooltip
+          valueMax={null}
+          yFormatter={formatKbps}
         />
       </div>
     </div>

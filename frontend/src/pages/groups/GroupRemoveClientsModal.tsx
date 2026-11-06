@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Input, Modal, Space, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -44,11 +44,16 @@ export default function GroupRemoveClientsModal({
     [members],
   );
 
-  useEffect(() => {
-    if (!open) return;
-    setSelectedEmails([]);
-    setSearch('');
-  }, [open, rows]);
+  // React resets this during render rather than in an effect so the modal's
+  // first open frame already shows cleared fields.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setSelectedEmails([]);
+      setSearch('');
+    }
+  }
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -110,13 +115,14 @@ export default function GroupRemoveClientsModal({
         {t('pages.groups.removeFromGroupDesc')}
       </Typography.Paragraph>
 
-      <Space direction="vertical" size="small" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="small" style={{ width: '100%' }}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
           <Input.Search
             allowClear
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t('pages.inbounds.attachClientsSearchPlaceholder')}
+            aria-label={t('pages.inbounds.attachClientsSearchPlaceholder')}
             style={{ maxWidth: 320 }}
           />
           <Typography.Text type="secondary">

@@ -15,9 +15,23 @@ export type Security = z.infer<typeof SecuritySchema>;
 // 'none' neither key appears. The Xray panel's StreamSettings class emits
 // `undefined` for the inactive branch which strips the key during JSON
 // serialization, so this DU faithfully describes what's on disk.
-export const SecuritySettingsSchema = z.discriminatedUnion('security', [
-  z.object({ security: z.literal('none') }),
-  z.object({ security: z.literal('tls'),     tlsSettings:     TlsStreamSettingsSchema }),
-  z.object({ security: z.literal('reality'), realitySettings: RealityStreamSettingsSchema }),
-]);
+//
+// Tunnel (dokodemo-door / TProxy) is transportless and may carry only
+// `sockopt` — its streamSettings has no `security` key at all. The
+// transportless branch accepts that shape, mirroring NetworkSettingsSchema's
+// `network: never().optional()` handling. A present-but-invalid security
+// still fails both branches so a typo can't slip through.
+
+// The inbound form swaps in a stricter tlsSettings; every other branch is shared.
+export function securitySettingsSchemaFor<T extends z.ZodType>(tlsSettings: T) {
+  return z.union([
+    z.discriminatedUnion('security', [
+      z.object({ security: z.literal('none') }),
+      z.object({ security: z.literal('tls'), tlsSettings }),
+      z.object({ security: z.literal('reality'), realitySettings: RealityStreamSettingsSchema }),
+    ]),
+    z.object({ security: z.never().optional() }),
+  ]);
+}
+export const SecuritySettingsSchema = securitySettingsSchemaFor(TlsStreamSettingsSchema);
 export type SecuritySettings = z.infer<typeof SecuritySettingsSchema>;

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useId } from 'react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Button, Checkbox, Form, Input, Modal, Select, Tag } from 'antd';
 import { DownloadOutlined, SyncOutlined } from '@ant-design/icons';
 
 import { HttpUtil, FileManager, IntlUtil, PromiseUtil } from '@/utils';
+import { activateOnKey } from '@/utils/a11y';
 import { useDatepicker } from '@/hooks/useDatepicker';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import './XrayLogModal.css';
@@ -23,11 +25,24 @@ interface XrayLogEntry {
   Event?: number;
 }
 
-const EVENT_LABELS: Record<number, string> = { 0: 'DIRECT', 1: 'BLOCKED', 2: 'PROXY' };
+// The downloaded log is a data format people grep, so it keeps the stable
+// tokens; only what is rendered on screen follows the panel language.
+const EVENT_TOKENS: Record<number, string> = { 0: 'DIRECT', 1: 'BLOCKED', 2: 'PROXY' };
+
+const EVENT_KEYS: Record<number, string> = {
+  0: 'pages.index.accessDirect',
+  1: 'pages.index.accessBlocked',
+  2: 'pages.index.accessProxy',
+};
 const EVENT_COLORS: Record<number, string> = { 0: 'green', 1: 'red', 2: 'blue' };
 
-function eventLabel(ev?: number): string {
-  return EVENT_LABELS[ev ?? -1] ?? String(ev ?? '');
+function eventToken(ev?: number): string {
+  return EVENT_TOKENS[ev ?? -1] ?? String(ev ?? '');
+}
+
+function eventLabel(t: TFunction, ev?: number): string {
+  const key = EVENT_KEYS[ev ?? -1];
+  return key ? t(key) : String(ev ?? '');
 }
 
 function eventColor(ev?: number): string {
@@ -44,8 +59,11 @@ function shortTime(value?: string | number): string {
   return `${hh}:${mm}:${ss}`;
 }
 
+const AUTO_UPDATE_INTERVAL = 5000;
+
 export default function XrayLogModal({ open, onClose }: XrayLogModalProps) {
   const { t } = useTranslation();
+  const uid = useId();
   const { datepicker } = useDatepicker();
   const { isMobile } = useMediaQuery();
   const [rows, setRows] = useState('20');
@@ -53,14 +71,13 @@ export default function XrayLogModal({ open, onClose }: XrayLogModalProps) {
   const [showDirect, setShowDirect] = useState(true);
   const [showBlocked, setShowBlocked] = useState(true);
   const [showProxy, setShowProxy] = useState(true);
+  const [autoUpdate, setAutoUpdate] = useState(false);
   const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState<XrayLogEntry[]>([]);
-  const openRef = useRef(open);
 
   const orderedLogs = useMemo(() => [...logs].reverse(), [logs]);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const runRefresh = useCallback(async () => {
     try {
       const msg = await HttpUtil.post<XrayLogEntry[]>(`/panel/api/server/xraylogs/${rows}`, {
         filter,
@@ -75,14 +92,36 @@ export default function XrayLogModal({ open, onClose }: XrayLogModalProps) {
     }
   }, [rows, filter, showDirect, showBlocked, showProxy]);
 
+  const refresh = useCallback(() => {
+    setLoading(true);
+    void runRefresh();
+  }, [runRefresh]);
+
+  const refreshRef = useRef(refresh);
   useEffect(() => {
-    openRef.current = open;
-    if (open) refresh();
-  }, [open, refresh]);
+    refreshRef.current = refresh;
+  });
+
+  // The spinner is raised during render so the fetch effect stays side-effect
+  // free until its response lands.
+  const refreshKey = open
+    ? `${rows}\u0000${showDirect}\u0000${showBlocked}\u0000${showProxy}`
+    : null;
+  const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  if (refreshKey !== loadingKey) {
+    setLoadingKey(refreshKey);
+    if (refreshKey) setLoading(true);
+  }
 
   useEffect(() => {
-    if (openRef.current) refresh();
-  }, [rows, showDirect, showBlocked, showProxy, refresh]);
+    if (open) void runRefresh();
+  }, [open, rows, showDirect, showBlocked, showProxy, runRefresh]);
+
+  useEffect(() => {
+    if (!open || !autoUpdate) return;
+    const id = setInterval(() => refreshRef.current(), AUTO_UPDATE_INTERVAL);
+    return () => clearInterval(id);
+  }, [open, autoUpdate]);
 
   function fullDate(value?: string | number): string {
     return IntlUtil.formatDate(value, datepicker);
@@ -93,17 +132,19 @@ export default function XrayLogModal({ open, onClose }: XrayLogModalProps) {
       FileManager.downloadTextFile('', 'x-ui.log');
       return;
     }
-    const lines = logs.map((l) => {
-      try {
-        const dt = l.DateTime ? new Date(l.DateTime) : null;
-        const dateStr = dt && !isNaN(dt.getTime()) ? dt.toISOString() : '';
-        const eventText = eventLabel(l.Event);
-        const emailPart = l.Email ? ` Email=${l.Email}` : '';
-        return `${dateStr} FROM=${l.FromAddress || ''} TO=${l.ToAddress || ''} INBOUND=${l.Inbound || ''} OUTBOUND=${l.Outbound || ''}${emailPart} EVENT=${eventText}`.trim();
-      } catch {
-        return JSON.stringify(l);
-      }
-    }).join('\n');
+    const lines = logs
+      .map((l) => {
+        try {
+          const dt = l.DateTime ? new Date(l.DateTime) : null;
+          const dateStr = dt && !isNaN(dt.getTime()) ? dt.toISOString() : '';
+          const eventText = eventToken(l.Event);
+          const emailPart = l.Email ? ` Email=${l.Email}` : '';
+          return `${dateStr} FROM=${l.FromAddress || ''} TO=${l.ToAddress || ''} INBOUND=${l.Inbound || ''} OUTBOUND=${l.Outbound || ''}${emailPart} EVENT=${eventText}`.trim();
+        } catch {
+          return JSON.stringify(l);
+        }
+      })
+      .join('\n');
     FileManager.downloadTextFile(lines, 'x-ui.log');
   }
 
@@ -117,29 +158,39 @@ export default function XrayLogModal({ open, onClose }: XrayLogModalProps) {
       onCancel={onClose}
       title={
         <>
-          {t('pages.index.logs')}
-          <SyncOutlined spin={loading} className="reload-icon" onClick={refresh} />
+          {t('pages.index.accessLogs')}
+          <SyncOutlined
+            spin={loading}
+            className="reload-icon"
+            role="button"
+            tabIndex={0}
+            aria-label={t('refresh')}
+            onClick={refresh}
+            onKeyDown={activateOnKey(refresh)}
+          />
         </>
       }
     >
       <Form layout="inline" className="log-toolbar">
         <Form.Item>
           <Select
+            aria-label={t('pages.index.logLines')}
             value={rows}
             size="small"
-            style={{ width: 70 }}
+            style={{ width: 100 }}
             onChange={setRows}
             options={[
-              { value: '10', label: '10' },
               { value: '20', label: '20' },
               { value: '50', label: '50' },
               { value: '100', label: '100' },
               { value: '500', label: '500' },
+              { value: '1000', label: '1000' },
             ]}
           />
         </Form.Item>
-        <Form.Item label={t('filter')} className="filter-item">
+        <Form.Item htmlFor={`${uid}-filter`} label={t('filter')} className="filter-item">
           <Input
+            id={`${uid}-filter`}
             value={filter}
             size="small"
             onChange={(e) => setFilter(e.target.value)}
@@ -158,9 +209,17 @@ export default function XrayLogModal({ open, onClose }: XrayLogModalProps) {
           <Checkbox checked={showProxy} onChange={(e) => setShowProxy(e.target.checked)}>
             Proxy
           </Checkbox>
+          <Checkbox checked={autoUpdate} onChange={(e) => setAutoUpdate(e.target.checked)}>
+            {t('pages.index.autoUpdate')}
+          </Checkbox>
         </Form.Item>
         <Form.Item className="download-item">
-          <Button type="primary" onClick={download} icon={<DownloadOutlined />} />
+          <Button
+            type="primary"
+            onClick={download}
+            icon={<DownloadOutlined aria-hidden />}
+            aria-label={t('download')}
+          />
         </Form.Item>
       </Form>
 
@@ -175,7 +234,7 @@ export default function XrayLogModal({ open, onClose }: XrayLogModalProps) {
                   {shortTime(log.DateTime)}
                 </span>
                 <Tag color={eventColor(log.Event)} className="log-event-tag">
-                  {eventLabel(log.Event)}
+                  {eventLabel(t, log.Event)}
                 </Tag>
               </div>
               <div className="log-route">

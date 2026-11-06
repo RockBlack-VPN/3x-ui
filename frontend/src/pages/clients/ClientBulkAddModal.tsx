@@ -1,79 +1,113 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AutoComplete, Button, Form, Input, InputNumber, Modal, Select, Space, Switch, message } from 'antd';
+import {
+  AutoComplete,
+  Button,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Switch,
+  Tooltip,
+  message,
+} from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
+import { FormProvider, useForm, useWatch } from 'react-hook-form';
 
 import { RandomUtil, SizeFormatter } from '@/utils';
-import { TLS_FLOW_CONTROL } from '@/schemas/primitives';
-import DateTimePicker from '@/components/DateTimePicker';
+import { formatInboundLabel } from '@/lib/inbounds/label';
+import { TLS_FLOW_CONTROL, TRAFFIC_RESETS } from '@/schemas/primitives';
+import { DateTimePicker, SelectAllClearButtons, selectTagRender } from '@/components/form';
+import { FormField } from '@/components/form/rhf';
 import { useClients, type InboundOption } from '@/hooks/useClients';
+import { useFail2banStatusQuery, getLimitIpNotice } from '@/api/queries/useFail2banStatusQuery';
+import ClientRenewalFields from './ClientRenewalFields';
 import { ClientBulkAddFormSchema, type ClientBulkAddFormValues } from '@/schemas/client';
 
 const FLOW_OPTIONS = Object.values(TLS_FLOW_CONTROL);
 
 const MULTI_CLIENT_PROTOCOLS = new Set([
-  'shadowsocks', 'vless', 'vmess', 'trojan', 'hysteria',
+  'shadowsocks',
+  'vless',
+  'vmess',
+  'trojan',
+  'hysteria',
+  'wireguard',
+  'amneziawg',
+  'tuic',
+  'masque',
 ]);
+
+const EMPTY: ClientBulkAddFormValues = {
+  emailMethod: 0,
+  firstNum: 1,
+  lastNum: 1,
+  emailPrefix: '',
+  emailPostfix: '',
+  quantity: 1,
+  subId: '',
+  group: '',
+  comment: '',
+  flow: '',
+  limitIp: 0,
+  limitHwid: 0,
+  totalGB: 0,
+  expiryTime: 0,
+  reset: 0,
+  resetDay: 0,
+  resetWeekday: 0,
+  resetMax: 0,
+  trafficReset: 'never' as const,
+  trafficResetDay: 1,
+  inboundIds: [],
+};
 
 interface ClientBulkAddModalProps {
   open: boolean;
   inbounds: InboundOption[];
-  ipLimitEnable?: boolean;
   groups?: string[];
   onOpenChange: (open: boolean) => void;
   onSaved?: () => void;
 }
 
-type FormState = ClientBulkAddFormValues;
-
-function emptyForm(): FormState {
-  return {
-    emailMethod: 0,
-    firstNum: 1,
-    lastNum: 1,
-    emailPrefix: '',
-    emailPostfix: '',
-    quantity: 1,
-    subId: '',
-    group: '',
-    comment: '',
-    flow: '',
-    limitIp: 0,
-    totalGB: 0,
-    expiryTime: 0,
-    reset: 0,
-    inboundIds: [],
-  };
-}
-
 export default function ClientBulkAddModal({
   open,
   inbounds,
-  ipLimitEnable = false,
   groups = [],
   onOpenChange,
   onSaved,
 }: ClientBulkAddModalProps) {
   const { t } = useTranslation();
+  const uid = useId();
   const [messageApi, messageContextHolder] = message.useMessage();
-  const { bulkCreate } = useClients();
+  const { bulkCreate } = useClients({ list: false });
 
-  const [form, setForm] = useState<FormState>(emptyForm);
+  const methods = useForm<ClientBulkAddFormValues>({ defaultValues: EMPTY });
+  const inboundIds = useWatch({ control: methods.control, name: 'inboundIds' });
+  const emailMethod = useWatch({ control: methods.control, name: 'emailMethod' });
+  const firstNum = useWatch({ control: methods.control, name: 'firstNum' });
+  const flow = useWatch({ control: methods.control, name: 'flow' });
+  const expiryTime = useWatch({ control: methods.control, name: 'expiryTime' });
+  const subId = useWatch({ control: methods.control, name: 'subId' });
+  const limitIp = useWatch({ control: methods.control, name: 'limitIp' });
+  const trafficReset = useWatch({ control: methods.control, name: 'trafficReset' });
   const [delayedStart, setDelayedStart] = useState(false);
   const [saving, setSaving] = useState(false);
+  const fail2ban = useFail2banStatusQuery();
+  const limitIpDisabled = !fail2ban.usable;
+  const limitIpNotice = getLimitIpNotice(fail2ban, t);
 
-  useEffect(() => {
-    if (!open) return;
-
-    setForm(emptyForm());
-    setDelayedStart(false);
-
-  }, [open]);
-
-  function update<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }));
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      methods.reset(EMPTY);
+      setDelayedStart(false);
+    }
   }
 
   const flowCapableIds = useMemo(() => {
@@ -85,49 +119,58 @@ export default function ClientBulkAddModal({
   }, [inbounds]);
 
   const showFlow = useMemo(
-    () => (form.inboundIds || []).some((id) => flowCapableIds.has(id)),
-    [form.inboundIds, flowCapableIds],
+    () => (inboundIds || []).some((id) => flowCapableIds.has(id)),
+    [inboundIds, flowCapableIds],
   );
 
-  useEffect(() => {
-    if (!showFlow && form.flow) {
-
-      update('flow', '');
+  const ss2022Method = useMemo(() => {
+    for (const id of inboundIds || []) {
+      const ib = (inbounds || []).find((row) => row.id === id);
+      const method = ib?.ssMethod;
+      if (method && method.substring(0, 4) === '2022') return method;
     }
-  }, [showFlow, form.flow]);
+    return '';
+  }, [inboundIds, inbounds]);
+
+  useEffect(() => {
+    if (!showFlow && flow) {
+      methods.setValue('flow', '');
+    }
+  }, [showFlow, flow, methods]);
 
   const inboundOptions = useMemo(
-    () => (inbounds || [])
-      .filter((ib) => MULTI_CLIENT_PROTOCOLS.has(ib.protocol || ''))
-      .map((ib) => ({
-        label: ib.tag ?? '',
-        value: ib.id,
-      })),
+    () =>
+      (inbounds || [])
+        .filter((ib) => MULTI_CLIENT_PROTOCOLS.has(ib.protocol || ''))
+        .map((ib) => ({
+          label: formatInboundLabel(ib.tag, ib.remark),
+          value: ib.id,
+        })),
     [inbounds],
   );
 
   const expiryDate = useMemo<Dayjs | null>(
-    () => (form.expiryTime > 0 ? dayjs(form.expiryTime) : null),
-    [form.expiryTime],
+    () => (expiryTime > 0 ? dayjs(expiryTime) : null),
+    [expiryTime],
   );
 
-  const delayedExpireDays = form.expiryTime < 0 ? form.expiryTime / -86400000 : 0;
+  const delayedExpireDays = expiryTime < 0 ? expiryTime / -86400000 : 0;
 
-  function buildEmails(): string[] {
-    const method = form.emailMethod;
+  function buildEmails(values: ClientBulkAddFormValues): string[] {
+    const method = values.emailMethod;
     const out: string[] = [];
     let start: number;
     let end: number;
     if (method > 1) {
-      start = form.firstNum;
-      end = form.lastNum + 1;
+      start = values.firstNum;
+      end = values.lastNum + 1;
     } else {
       start = 0;
-      end = form.quantity;
+      end = values.quantity;
     }
-    const prefix = method > 0 && form.emailPrefix.length > 0 ? form.emailPrefix : '';
+    const prefix = method > 0 && values.emailPrefix.length > 0 ? values.emailPrefix : '';
     const useNum = method > 1;
-    const postfix = method > 2 && form.emailPostfix.length > 0 ? form.emailPostfix : '';
+    const postfix = method > 2 && values.emailPostfix.length > 0 ? values.emailPostfix : '';
     for (let i = start; i < end; i++) {
       let email = '';
       if (method !== 4) email = RandomUtil.randomLowerAndNum(10);
@@ -138,12 +181,13 @@ export default function ClientBulkAddModal({
   }
 
   async function submit() {
-    const validated = ClientBulkAddFormSchema.safeParse(form);
+    const current = methods.getValues();
+    const validated = ClientBulkAddFormSchema.safeParse(current);
     if (!validated.success) {
       messageApi.error(t(validated.error.issues[0]?.message ?? 'somethingWentWrong'));
       return;
     }
-    const emails = buildEmails();
+    const emails = buildEmails(current);
     if (emails.length === 0) return;
 
     setSaving(true);
@@ -151,20 +195,28 @@ export default function ClientBulkAddModal({
       const payloads = emails.map((email) => ({
         client: {
           email,
-          subId: form.subId || RandomUtil.randomLowerAndNum(16),
+          subId: current.subId || RandomUtil.randomLowerAndNum(16),
           id: RandomUtil.randomUUID(),
-          password: RandomUtil.randomLowerAndNum(16),
+          password: ss2022Method
+            ? RandomUtil.randomShadowsocksPassword(ss2022Method)
+            : RandomUtil.randomLowerAndNum(16),
           auth: RandomUtil.randomLowerAndNum(16),
-          flow: showFlow ? (form.flow || '') : '',
-          totalGB: Math.round((form.totalGB || 0) * SizeFormatter.ONE_GB),
-          expiryTime: form.expiryTime,
-          reset: Number(form.reset) || 0,
-          limitIp: Number(form.limitIp) || 0,
-          group: form.group,
-          comment: form.comment,
+          flow: showFlow ? current.flow || '' : '',
+          totalGB: Math.round((current.totalGB || 0) * SizeFormatter.ONE_GB),
+          expiryTime: current.expiryTime,
+          reset: Number(current.reset) || 0,
+          resetDay: Number(current.resetDay) || 0,
+          resetWeekday: Number(current.resetWeekday) || 0,
+          resetMax: Number(current.resetMax) || 0,
+          trafficReset: current.trafficReset || 'never',
+          trafficResetDay: Number(current.trafficResetDay) || 1,
+          limitIp: Number(current.limitIp) || 0,
+          limitHwid: Number(current.limitHwid) || 0,
+          group: current.group,
+          comment: current.comment,
           enable: true,
         },
-        inboundIds: form.inboundIds,
+        inboundIds: current.inboundIds,
       }));
       const msg = await bulkCreate(payloads);
       const ok = msg?.obj?.created ?? 0;
@@ -174,9 +226,11 @@ export default function ClientBulkAddModal({
       if (failed === 0 && msg?.success) {
         messageApi.success(t('pages.clients.toasts.bulkCreated', { count: ok }));
       } else {
-        messageApi.warning(firstError
-          ? `${t('pages.clients.toasts.bulkCreatedMixed', { ok, failed })} — ${firstError}`
-          : t('pages.clients.toasts.bulkCreatedMixed', { ok, failed }));
+        messageApi.warning(
+          firstError
+            ? `${t('pages.clients.toasts.bulkCreatedMixed', { ok, failed })} — ${firstError}`
+            : t('pages.clients.toasts.bulkCreatedMixed', { ok, failed }),
+        );
       }
       onSaved?.();
       onOpenChange(false);
@@ -199,151 +253,219 @@ export default function ClientBulkAddModal({
         onOk={submit}
         onCancel={() => onOpenChange(false)}
       >
-        <Form colon={false} labelCol={{ sm: { span: 8 } }} wrapperCol={{ sm: { span: 14 } }}>
-          <Form.Item label={t('pages.clients.attachedInbounds')} required>
-            <Select
-              mode="multiple"
-              value={form.inboundIds}
-              onChange={(v) => update('inboundIds', v)}
-              options={inboundOptions}
-              placeholder={t('pages.clients.selectInbound')}
-              showSearch={{
-                filterOption: (input, option) => ((option?.label as string) || '').toLowerCase().includes(input.toLowerCase()),
-              }}
-            />
-          </Form.Item>
-
-          <Form.Item label={t('pages.clients.method')}>
-            <Select
-              value={form.emailMethod}
-              onChange={(v) => update('emailMethod', v)}
-              options={[
-                { value: 0, label: 'Random' },
-                { value: 1, label: 'Random + Prefix' },
-                { value: 2, label: 'Random + Prefix + Num' },
-                { value: 3, label: 'Random + Prefix + Num + Postfix' },
-                { value: 4, label: 'Prefix + Num + Postfix' },
-              ]}
-            />
-          </Form.Item>
-
-          {form.emailMethod > 1 && (
-            <>
-              <Form.Item label={t('pages.clients.first')}>
-                <InputNumber value={form.firstNum} min={1} onChange={(v) => update('firstNum', Number(v) || 1)} />
-              </Form.Item>
-              <Form.Item label={t('pages.clients.last')}>
-                <InputNumber value={form.lastNum} min={form.firstNum} onChange={(v) => update('lastNum', Number(v) || 1)} />
-              </Form.Item>
-            </>
-          )}
-          {form.emailMethod > 0 && (
-            <Form.Item label={t('pages.clients.prefix')}>
-              <Input value={form.emailPrefix} onChange={(e) => update('emailPrefix', e.target.value)} />
-            </Form.Item>
-          )}
-          {form.emailMethod > 2 && (
-            <Form.Item label={t('pages.clients.postfix')}>
-              <Input value={form.emailPostfix} onChange={(e) => update('emailPostfix', e.target.value)} />
-            </Form.Item>
-          )}
-          {form.emailMethod < 2 && (
-            <Form.Item label={t('pages.clients.clientCount')}>
-              <InputNumber value={form.quantity} min={1} max={100} onChange={(v) => update('quantity', Number(v) || 1)} />
-            </Form.Item>
-          )}
-
-          <Form.Item label={t('pages.clients.subId')}>
-            <Space.Compact style={{ display: 'flex' }}>
-              <Input
-                value={form.subId}
-                onChange={(e) => update('subId', e.target.value)}
-                style={{ flex: 1 }}
+        <FormProvider {...methods}>
+          <Form colon={false} labelCol={{ sm: { span: 8 } }} wrapperCol={{ sm: { span: 14 } }}>
+            <Form.Item
+              label={t('pages.clients.attachedInbounds')}
+              required
+              htmlFor={`${uid}-inbounds`}
+            >
+              <SelectAllClearButtons
+                options={inboundOptions}
+                value={inboundIds}
+                onChange={(v) => methods.setValue('inboundIds', v)}
               />
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={() => update('subId', RandomUtil.randomLowerAndNum(16))}
-              />
-            </Space.Compact>
-          </Form.Item>
-
-          <Form.Item label={t('pages.clients.group')} tooltip={t('pages.clients.groupDesc')}>
-            <AutoComplete
-              value={form.group}
-              placeholder={t('pages.clients.groupPlaceholder')}
-              options={groups.map((g) => ({ value: g }))}
-              onChange={(v) => update('group', v ?? '')}
-              filterOption={(input, option) =>
-                String(option?.value ?? '').toLowerCase().includes((input || '').toLowerCase())
-              }
-              allowClear
-              style={{ width: '100%' }}
-            />
-          </Form.Item>
-
-          <Form.Item label={t('comment')}>
-            <Input value={form.comment} onChange={(e) => update('comment', e.target.value)} />
-          </Form.Item>
-
-          {showFlow && (
-            <Form.Item label={t('pages.clients.flow')}>
               <Select
-                value={form.flow}
-                onChange={(v) => update('flow', v)}
-                style={{ width: 220 }}
+                id={`${uid}-inbounds`}
+                mode="multiple"
+                tagRender={selectTagRender}
+                value={inboundIds}
+                onChange={(v) => methods.setValue('inboundIds', v)}
+                options={inboundOptions}
+                placeholder={t('pages.clients.selectInbound')}
+                showSearch={{
+                  filterOption: (input, option) =>
+                    ((option?.label as string) || '').toLowerCase().includes(input.toLowerCase()),
+                }}
+              />
+            </Form.Item>
+
+            <FormField name="emailMethod" label={t('pages.clients.method')}>
+              <Select
                 options={[
-                  { value: '', label: t('none') },
-                  ...FLOW_OPTIONS.map((k) => ({ value: k, label: k })),
+                  { value: 0, label: 'Random' },
+                  { value: 1, label: 'Random + Prefix' },
+                  { value: 2, label: 'Random + Prefix + Num' },
+                  { value: 3, label: 'Random + Prefix + Num + Postfix' },
+                  { value: 4, label: 'Prefix + Num + Postfix' },
                 ]}
               />
+            </FormField>
+
+            {emailMethod > 1 && (
+              <>
+                <FormField
+                  name="firstNum"
+                  label={t('pages.clients.first')}
+                  transform={{ output: (v) => Number(v) || 1 }}
+                >
+                  <InputNumber min={1} />
+                </FormField>
+                <FormField
+                  name="lastNum"
+                  label={t('pages.clients.last')}
+                  transform={{ output: (v) => Number(v) || 1 }}
+                >
+                  <InputNumber min={firstNum} />
+                </FormField>
+              </>
+            )}
+            {emailMethod > 0 && (
+              <FormField name="emailPrefix" label={t('pages.clients.prefix')}>
+                <Input />
+              </FormField>
+            )}
+            {emailMethod > 2 && (
+              <FormField name="emailPostfix" label={t('pages.clients.postfix')}>
+                <Input />
+              </FormField>
+            )}
+            {emailMethod < 2 && (
+              <FormField
+                name="quantity"
+                label={t('pages.clients.clientCount')}
+                transform={{ output: (v) => Number(v) || 1 }}
+              >
+                <InputNumber min={1} max={1000} />
+              </FormField>
+            )}
+
+            <Form.Item label={t('pages.clients.subId')} htmlFor={`${uid}-sub-id`}>
+              <Space.Compact style={{ display: 'flex' }}>
+                <Input
+                  id={`${uid}-sub-id`}
+                  value={subId}
+                  onChange={(e) => methods.setValue('subId', e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  aria-label={t('regenerate')}
+                  icon={<ReloadOutlined aria-hidden />}
+                  onClick={() => methods.setValue('subId', RandomUtil.randomLowerAndNum(16))}
+                />
+              </Space.Compact>
             </Form.Item>
-          )}
 
-          {ipLimitEnable && (
-            <Form.Item label={t('pages.clients.limitIp')}>
-              <InputNumber value={form.limitIp} min={0} onChange={(v) => update('limitIp', Number(v) || 0)} />
+            <FormField
+              name="group"
+              label={t('pages.clients.group')}
+              tooltip={t('pages.clients.groupDesc')}
+              transform={{ output: (v) => v ?? '' }}
+            >
+              <AutoComplete
+                placeholder={t('pages.clients.groupPlaceholder')}
+                options={groups.map((g) => ({ value: g }))}
+                allowClear
+              />
+            </FormField>
+
+            <FormField
+              name="limitHwid"
+              label={t('pages.clients.limitHwid')}
+              tooltip={t('pages.clients.limitHwidDesc')}
+              transform={{ output: (v) => Number(v) || 0 }}
+            >
+              <InputNumber min={0} />
+            </FormField>
+
+            <FormField name="comment" label={t('comment')}>
+              <Input />
+            </FormField>
+
+            {showFlow && (
+              <FormField name="flow" label={t('pages.clients.flow')}>
+                <Select
+                  style={{ width: 220 }}
+                  options={[
+                    { value: '', label: t('none') },
+                    ...FLOW_OPTIONS.map((k) => ({ value: k, label: k })),
+                  ]}
+                />
+              </FormField>
+            )}
+
+            <Form.Item label={t('pages.clients.limitIp')} htmlFor={`${uid}-limit-ip`}>
+              <Tooltip title={limitIpNotice || undefined}>
+                <span style={{ display: 'inline-flex' }}>
+                  <InputNumber
+                    id={`${uid}-limit-ip`}
+                    value={limitIp}
+                    min={0}
+                    disabled={limitIpDisabled}
+                    style={limitIpDisabled ? { pointerEvents: 'none' } : undefined}
+                    onChange={(v) => methods.setValue('limitIp', Number(v) || 0)}
+                  />
+                </span>
+              </Tooltip>
             </Form.Item>
-          )}
 
-          <Form.Item label={t('pages.clients.totalGB')}>
-            <InputNumber value={form.totalGB} min={0} step={1} onChange={(v) => update('totalGB', Number(v) || 0)} />
-          </Form.Item>
+            <FormField
+              name="totalGB"
+              label={t('pages.clients.totalGB')}
+              tooltip={t('pages.clients.totalGBDesc')}
+              transform={{ output: (v) => Number(v) || 0 }}
+            >
+              <InputNumber min={0} step={1} />
+            </FormField>
 
-          <Form.Item label={t('pages.clients.delayedStart')}>
-            <Switch
-              checked={delayedStart}
-              onClick={() => { setDelayedStart(!delayedStart); update('expiryTime', 0); }}
-            />
-          </Form.Item>
-
-          {delayedStart ? (
-            <Form.Item label={t('pages.clients.expireDays')}>
-              <InputNumber
-                value={delayedExpireDays}
-                min={0}
-                onChange={(v) => update('expiryTime', -86400000 * (Number(v) || 0))}
+            <Form.Item label={t('pages.clients.delayedStart')} htmlFor={`${uid}-delayed-start`}>
+              <Switch
+                id={`${uid}-delayed-start`}
+                checked={delayedStart}
+                onClick={() => {
+                  setDelayedStart(!delayedStart);
+                  methods.setValue('expiryTime', 0);
+                }}
               />
             </Form.Item>
-          ) : (
-            <Form.Item label={t('pages.inbounds.expireDate')}>
-              <DateTimePicker
-                value={expiryDate}
-                onChange={(next) => update('expiryTime', next ? next.valueOf() : 0)}
-              />
-            </Form.Item>
-          )}
 
-          <Form.Item
-            label={t('pages.clients.renew')}
-            tooltip={t('pages.clients.renewDesc')}
-          >
-            <InputNumber
-              value={form.reset}
-              min={0}
-              onChange={(v) => update('reset', Number(v) || 0)}
+            {delayedStart ? (
+              <Form.Item label={t('pages.clients.expireDays')} htmlFor={`${uid}-expire-days`}>
+                <InputNumber
+                  id={`${uid}-expire-days`}
+                  value={delayedExpireDays}
+                  min={0}
+                  onChange={(v) => methods.setValue('expiryTime', -86400000 * (Number(v) || 0))}
+                />
+              </Form.Item>
+            ) : (
+              <Form.Item label={t('pages.inbounds.expireDate')} htmlFor={`${uid}-expiry`}>
+                <DateTimePicker
+                  id={`${uid}-expiry`}
+                  value={expiryDate}
+                  onChange={(next) => methods.setValue('expiryTime', next ? next.valueOf() : 0)}
+                />
+              </Form.Item>
+            )}
+
+            <ClientRenewalFields
+              active={open}
+              delayedStart={delayedStart}
+              expiryTime={expiryTime}
+              bulk
+              setExpiry={(expiry) => methods.setValue('expiryTime', expiry)}
             />
-          </Form.Item>
-        </Form>
+
+            <FormField name="trafficReset" label={t('pages.inbounds.periodicTrafficResetTitle')}>
+              <Select
+                options={TRAFFIC_RESETS.map((r) => ({
+                  value: r,
+                  label: t(`pages.inbounds.periodicTrafficReset.${r}`),
+                }))}
+              />
+            </FormField>
+
+            {trafficReset === 'monthly' && (
+              <FormField
+                name="trafficResetDay"
+                label={t('pages.inbounds.periodicTrafficResetDay')}
+                transform={{ output: (v) => Number(v) || 1 }}
+              >
+                <InputNumber min={1} max={31} />
+              </FormField>
+            )}
+          </Form>
+        </FormProvider>
       </Modal>
     </>
   );

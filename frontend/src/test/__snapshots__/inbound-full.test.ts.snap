@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] = `
+exports[`InboundSchema (full) fixtures > parses hysteria-tls byte-stably 1`] = `
 {
   "down": 0,
   "enable": true,
@@ -9,7 +9,7 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
   "listen": "",
   "port": 36715,
   "protocol": "hysteria",
-  "remark": "gina-hysteria-v1",
+  "remark": "gina-hysteria",
   "settings": {
     "clients": [
       {
@@ -25,8 +25,10 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
         "totalGB": 0,
       },
     ],
-    "version": 1,
+    "version": 2,
   },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
   "sniffing": {
     "destOverride": [
       "http",
@@ -55,6 +57,7 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/hysteria.crt",
           "keyFile": "/etc/ssl/private/hysteria.key",
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -71,10 +74,100 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
         "echConfigList": "",
         "fingerprint": "chrome",
         "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
       },
     },
   },
-  "tag": "inbound-hysteria-v1",
+  "tag": "inbound-hysteria",
+  "total": 0,
+  "up": 0,
+}
+`;
+
+exports[`InboundSchema (full) fixtures > parses masque-tls byte-stably 1`] = `
+{
+  "down": 0,
+  "enable": true,
+  "expiryTime": 0,
+  "id": 31,
+  "listen": "",
+  "port": 8443,
+  "protocol": "masque",
+  "remark": "ivy-masque",
+  "settings": {
+    "address": [
+      "10.14.0.1/24",
+      "fd14::1/64",
+    ],
+    "clients": [
+      {
+        "comment": "",
+        "email": "ivy@example.test",
+        "enable": true,
+        "expiryTime": 0,
+        "limitIp": 0,
+        "password": "masque-pass-ivy",
+        "reset": 0,
+        "subId": "masque-001",
+        "tgId": 0,
+        "totalGB": 0,
+      },
+    ],
+    "mtu": 1400,
+  },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
+  "sniffing": {
+    "destOverride": [
+      "http",
+      "tls",
+      "quic",
+      "fakedns",
+    ],
+    "domainsExcluded": [],
+    "enabled": true,
+    "ipsExcluded": [],
+    "metadataOnly": false,
+    "routeOnly": false,
+  },
+  "streamSettings": {
+    "masqueSettings": {
+      "path": "/.well-known/masque/ip/*/*/",
+    },
+    "network": "masque",
+    "security": "tls",
+    "tlsSettings": {
+      "alpn": [
+        "h3",
+        "h2",
+      ],
+      "certificates": [
+        {
+          "buildChain": false,
+          "certificateFile": "/etc/ssl/certs/masque.crt",
+          "keyFile": "/etc/ssl/private/masque.key",
+          "ocspStapling": 0,
+          "oneTimeLoading": false,
+          "usage": "encipherment",
+        },
+      ],
+      "cipherSuites": "",
+      "disableSystemRoot": false,
+      "echServerKeys": "",
+      "enableSessionResumption": false,
+      "maxVersion": "1.3",
+      "minVersion": "1.2",
+      "rejectUnknownSni": false,
+      "serverName": "masque.example.test",
+      "settings": {
+        "echConfigList": "",
+        "fingerprint": "chrome",
+        "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
+      },
+    },
+  },
+  "tag": "inbound-masque",
   "total": 0,
   "up": 0,
 }
@@ -111,6 +204,8 @@ exports[`InboundSchema (full) fixtures > parses shadowsocks-tcp-2022 byte-stably
     "network": "tcp,udp",
     "password": "ZmFrZS1zZXJ2ZXItcGFzc3dvcmQtMDAwMQ==",
   },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
   "sniffing": {
     "destOverride": [
       "http",
@@ -167,6 +262,8 @@ exports[`InboundSchema (full) fixtures > parses trojan-ws-tls byte-stably 1`] = 
     ],
     "fallbacks": [],
   },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
   "sniffing": {
     "destOverride": [
       "http",
@@ -193,6 +290,7 @@ exports[`InboundSchema (full) fixtures > parses trojan-ws-tls byte-stably 1`] = 
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/trojan.crt",
           "keyFile": "/etc/ssl/private/trojan.key",
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -209,6 +307,7 @@ exports[`InboundSchema (full) fixtures > parses trojan-ws-tls byte-stably 1`] = 
         "echConfigList": "",
         "fingerprint": "chrome",
         "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
       },
     },
     "wsSettings": {
@@ -255,6 +354,8 @@ exports[`InboundSchema (full) fixtures > parses vless-tcp-reality byte-stably 1`
     "encryption": "none",
     "fallbacks": [],
   },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
   "sniffing": {
     "destOverride": [
       "http",
@@ -339,6 +440,8 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls byte-stably 1`] = `
     "encryption": "none",
     "fallbacks": [],
   },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
   "sniffing": {
     "destOverride": [
       "http",
@@ -365,6 +468,7 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls byte-stably 1`] = `
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/cdn.example.test.crt",
           "keyFile": "/etc/ssl/private/cdn.example.test.key",
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -381,6 +485,7 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls byte-stably 1`] = `
         "echConfigList": "",
         "fingerprint": "chrome",
         "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
       },
     },
     "wsSettings": {
@@ -427,6 +532,8 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls-pinned byte-stably 
     "encryption": "none",
     "fallbacks": [],
   },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
   "sniffing": {
     "destOverride": [
       "http",
@@ -453,6 +560,7 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls-pinned byte-stably 
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/cdn.example.test.crt",
           "keyFile": "/etc/ssl/private/cdn.example.test.key",
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -472,6 +580,7 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls-pinned byte-stably 
           "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
           "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
         ],
+        "verifyPeerCertByName": "",
       },
     },
     "wsSettings": {
@@ -501,6 +610,7 @@ exports[`InboundSchema (full) fixtures > parses vmess-tcp-tls byte-stably 1`] = 
   "settings": {
     "clients": [
       {
+        "alterId": 0,
         "comment": "",
         "email": "carol@example.test",
         "enable": true,
@@ -515,6 +625,8 @@ exports[`InboundSchema (full) fixtures > parses vmess-tcp-tls byte-stably 1`] = 
       },
     ],
   },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
   "sniffing": {
     "destOverride": [
       "http",
@@ -547,6 +659,7 @@ exports[`InboundSchema (full) fixtures > parses vmess-tcp-tls byte-stably 1`] = 
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/vmess.crt",
           "keyFile": "/etc/ssl/private/vmess.key",
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -563,6 +676,7 @@ exports[`InboundSchema (full) fixtures > parses vmess-tcp-tls byte-stably 1`] = 
         "echConfigList": "",
         "fingerprint": "chrome",
         "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
       },
     },
   },
@@ -583,6 +697,7 @@ exports[`InboundSchema (full) fixtures > parses wireguard-server byte-stably 1`]
   "protocol": "wireguard",
   "remark": "wg-server",
   "settings": {
+    "clients": [],
     "mtu": 1420,
     "noKernelTun": false,
     "peers": [
@@ -596,7 +711,10 @@ exports[`InboundSchema (full) fixtures > parses wireguard-server byte-stably 1`]
       },
     ],
     "secretKey": "iJ2cBkrSGqRwIfYIDIxk7hr5RXfdR93MfJUL7yqkkH8=",
+    "subnetIp": "",
   },
+  "shareAddr": "",
+  "shareAddrStrategy": "node",
   "sniffing": {
     "destOverride": [
       "http",

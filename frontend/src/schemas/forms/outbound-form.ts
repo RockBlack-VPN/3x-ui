@@ -1,42 +1,20 @@
 import { z } from 'zod';
 
-import { PortSchema } from '@/schemas/primitives';
-import { VmessSecuritySchema } from '@/schemas/protocols/inbound/vmess';
-import { SSMethodSchema } from '@/schemas/protocols/inbound/shadowsocks';
+import { PortSchema, SniffingSchema, type Sniffing } from '@/schemas/primitives';
+import { SSMethodSchema } from '@/schemas/protocols/shared/shadowsocks';
+import { VmessSecuritySchema } from '@/schemas/protocols/shared/vmess';
 import { SecuritySettingsSchema } from '@/schemas/protocols/security';
 import { NetworkSettingsSchema, StreamExtrasSchema } from '@/schemas/protocols/stream';
 import {
+  AmneziaWGOutboundSettingsSchema,
   BlackholeResponseTypeSchema,
   DNSRuleActionSchema,
   FreedomFinalRuleActionSchema,
   FreedomFragmentSchema,
   FreedomNoiseSchema,
   OutboundDomainStrategySchema,
-  WireguardDomainStrategySchema,
 } from '@/schemas/protocols/outbound';
 
-// OutboundFormValues = the shape Form.useForm<T>() carries inside
-// OutboundFormModal. Differences from schemas/api wire schemas:
-//
-//   - vmess vnext / trojan-ss-socks-http servers are FLATTENED into
-//     {address, port, ...auth} at settings root. The adapter handles
-//     nesting on submit.
-//   - wireguard `address` (string[] wire) and `reserved` (number[] wire)
-//     are comma-joined STRINGS in the form. The adapter splits + coerces.
-//   - wireguard `pubKey` is a UI-only field derived from `secretKey`. Not
-//     emitted on the wire — the adapter strips it.
-//   - VLESS `reverseTag` and `reverseSniffing` are flat at settings root;
-//     the adapter wraps them as { reverse: { tag, sniffing } } on the wire.
-//   - blackhole `type` ('' | 'none' | 'http') is flat; the adapter wraps it
-//     as { response: { type } } on the wire (omitted when empty).
-//   - DNS rules carry `qtype` and `domain` as comma-joined strings (matches
-//     the legacy DNSRule UI). The adapter normalizes them on submit.
-//
-// All flat-form settings types are documented inline so the adapter has a
-// single source of truth for the shape it converts between.
-
-// VMess outbound: connect target (address+port) + first user (id+security).
-// Wire: { vnext: [{ address, port, users: [{ id, security }] }] }.
 export const VmessOutboundFormSettingsSchema = z.object({
   address: z.string().default(''),
   port: PortSchema.default(443),
@@ -45,20 +23,18 @@ export const VmessOutboundFormSettingsSchema = z.object({
 });
 export type VmessOutboundFormSettings = z.infer<typeof VmessOutboundFormSettingsSchema>;
 
-// Reverse-sniffing is only emitted when reverseTag is non-empty. Defaults
-// match legacy ReverseSniffing constructor.
-export const ReverseSniffingFormSchema = z.object({
-  enabled: z.boolean().default(false),
-  destOverride: z.array(z.string()).default(['http', 'tls', 'quic', 'fakedns']),
-  metadataOnly: z.boolean().default(false),
-  routeOnly: z.boolean().default(false),
-  ipsExcluded: z.array(z.string()).default([]),
-  domainsExcluded: z.array(z.string()).default([]),
-});
-export type ReverseSniffingForm = z.infer<typeof ReverseSniffingFormSchema>;
+// Reverse sniffing (VLESS) and loopback sniffing share the canonical
+// SniffingSchema — the same definition the inbound Sniffing tab uses — so
+// there is one source of truth for an xray SniffingConfig across the panel.
+const DEFAULT_SNIFFING: Sniffing = {
+  enabled: false,
+  destOverride: ['http', 'tls', 'quic', 'fakedns'],
+  metadataOnly: false,
+  routeOnly: false,
+  ipsExcluded: [],
+  domainsExcluded: [],
+};
 
-// VLESS outbound: flat connect target + auth + Vision-specific knobs +
-// reverse-sniffing slice. testpre/testseed live behind canEnableVisionSeed.
 export const VlessOutboundFormSettingsSchema = z.object({
   address: z.string().default(''),
   port: PortSchema.default(443),
@@ -66,14 +42,7 @@ export const VlessOutboundFormSettingsSchema = z.object({
   flow: z.string().default(''),
   encryption: z.string().min(1).default('none'),
   reverseTag: z.string().default(''),
-  reverseSniffing: ReverseSniffingFormSchema.default({
-    enabled: false,
-    destOverride: ['http', 'tls', 'quic', 'fakedns'],
-    metadataOnly: false,
-    routeOnly: false,
-    ipsExcluded: [],
-    domainsExcluded: [],
-  }),
+  reverseSniffing: SniffingSchema.default(DEFAULT_SNIFFING),
   testpre: z.number().int().min(0).default(0),
   testseed: z.array(z.number().int().positive()).default([]),
 });
@@ -111,6 +80,7 @@ export const HttpOutboundFormSettingsSchema = z.object({
   port: PortSchema.default(8080),
   user: z.string().default(''),
   pass: z.string().default(''),
+  headers: z.record(z.string(), z.string()).default({}),
 });
 export type HttpOutboundFormSettings = z.infer<typeof HttpOutboundFormSettingsSchema>;
 
@@ -134,13 +104,17 @@ export const WireguardOutboundFormSettingsSchema = z.object({
   secretKey: z.string().default(''),
   pubKey: z.string().default(''),
   address: z.string().default(''),
-  workers: z.number().int().min(0).default(2),
-  domainStrategy: z.union([WireguardDomainStrategySchema, z.literal('')]).default(''),
   reserved: z.string().default(''),
+  remoteDNS: z.string().default(''),
   peers: z.array(WireguardOutboundFormPeerSchema).default([]),
   noKernelTun: z.boolean().default(false),
 });
 export type WireguardOutboundFormSettings = z.infer<typeof WireguardOutboundFormSettingsSchema>;
+
+// Re-export under the form name: the form state IS the wire shape (flat
+// obfuscation fields, same as the inbound server block), so no rename layer.
+export const AmneziaWGOutboundFormSettingsSchema = AmneziaWGOutboundSettingsSchema;
+export type AmneziaWGOutboundFormSettings = z.infer<typeof AmneziaWGOutboundFormSettingsSchema>;
 
 // Hysteria outbound carries the connect target only; transport-layer knobs
 // (auth, congestion, up/down, hop port, timeouts) ride on stream.hysteria.
@@ -150,6 +124,13 @@ export const HysteriaOutboundFormSettingsSchema = z.object({
   version: z.literal(2).default(2),
 });
 export type HysteriaOutboundFormSettings = z.infer<typeof HysteriaOutboundFormSettingsSchema>;
+
+export const MasqueOutboundFormSettingsSchema = z.object({
+  address: z.string().default(''),
+  port: PortSchema.default(443),
+  remoteDNS: z.array(z.string()).default([]),
+});
+export type MasqueOutboundFormSettings = z.infer<typeof MasqueOutboundFormSettingsSchema>;
 
 // FinalRule (freedom): network/port are strings; ip is string[]; blockDelay
 // is only meaningful when action === 'block'. The adapter omits empty
@@ -166,6 +147,7 @@ export type FreedomFinalRuleForm = z.infer<typeof FreedomFinalRuleFormSchema>;
 export const FreedomOutboundFormSettingsSchema = z.object({
   domainStrategy: z.union([OutboundDomainStrategySchema, z.literal('')]).default(''),
   redirect: z.string().default(''),
+  userLevel: z.number().int().min(0).default(0),
   proxyProtocol: z.number().int().min(0).max(2).default(0),
   fragment: FreedomFragmentSchema.default({
     packets: '1-3',
@@ -182,15 +164,17 @@ export type FreedomOutboundFormSettings = z.infer<typeof FreedomOutboundFormSett
 // adapter wraps as { response: { type } } on the wire and omits when empty.
 export const BlackholeOutboundFormSettingsSchema = z.object({
   type: z.union([BlackholeResponseTypeSchema, z.literal('')]).default(''),
+  customResponseData: z.string().default(''),
 });
 export type BlackholeOutboundFormSettings = z.infer<typeof BlackholeOutboundFormSettingsSchema>;
 
-// DNS rules: form holds qtype + domain as joined strings (the legacy UI
+// DNS rules: form holds qType + domain as joined strings (the legacy UI
 // binds to <Input>). Adapter parses them on submit per the DNSRule class.
 export const DnsRuleFormSchema = z.object({
   action: DNSRuleActionSchema.default('direct'),
-  qtype: z.string().default(''),
+  qType: z.string().default(''),
   domain: z.string().default(''),
+  rCode: z.number().int().min(0).max(65535).default(0),
 });
 export type DnsRuleForm = z.infer<typeof DnsRuleFormSchema>;
 
@@ -203,26 +187,31 @@ export const DnsOutboundFormSettingsSchema = z.object({
 });
 export type DnsOutboundFormSettings = z.infer<typeof DnsOutboundFormSettingsSchema>;
 
+// Loopback reinjects into a named inbound; `sniffing` (same flat shape as
+// VLESS reverse-sniffing) is only emitted when enabled — see the adapter.
 export const LoopbackOutboundFormSettingsSchema = z.object({
   inboundTag: z.string().default(''),
+  sniffing: SniffingSchema.default(DEFAULT_SNIFFING),
 });
 export type LoopbackOutboundFormSettings = z.infer<typeof LoopbackOutboundFormSettingsSchema>;
 
 // Discriminated union on `protocol`. Same tagged-wrapper pattern as the
 // inbound side: each branch is { protocol: literal, settings: <flat> }.
 export const OutboundFormSettingsSchema = z.discriminatedUnion('protocol', [
-  z.object({ protocol: z.literal('vmess'),       settings: VmessOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('vless'),       settings: VlessOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('trojan'),      settings: TrojanOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('vmess'), settings: VmessOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('vless'), settings: VlessOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('trojan'), settings: TrojanOutboundFormSettingsSchema }),
   z.object({ protocol: z.literal('shadowsocks'), settings: ShadowsocksOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('socks'),       settings: SocksOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('http'),        settings: HttpOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('wireguard'),   settings: WireguardOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('hysteria'),    settings: HysteriaOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('freedom'),     settings: FreedomOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('blackhole'),   settings: BlackholeOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('dns'),         settings: DnsOutboundFormSettingsSchema }),
-  z.object({ protocol: z.literal('loopback'),    settings: LoopbackOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('socks'), settings: SocksOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('http'), settings: HttpOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('wireguard'), settings: WireguardOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('amneziawg'), settings: AmneziaWGOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('hysteria'), settings: HysteriaOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('masque'), settings: MasqueOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('freedom'), settings: FreedomOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('blackhole'), settings: BlackholeOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('dns'), settings: DnsOutboundFormSettingsSchema }),
+  z.object({ protocol: z.literal('loopback'), settings: LoopbackOutboundFormSettingsSchema }),
 ]);
 export type OutboundFormSettings = z.infer<typeof OutboundFormSettingsSchema>;
 
@@ -240,16 +229,17 @@ export type MuxForm = z.infer<typeof MuxFormSchema>;
 // DU + extras (sockopt). Hysteria gets a side-channel branch in the modal
 // (legacy ob.stream.hysteria) — keeping the DU strict for now and routing
 // hysteria transport knobs through the Advanced JSON tab if needed.
-export const OutboundStreamFormSchema = NetworkSettingsSchema
-  .and(SecuritySettingsSchema)
-  .and(StreamExtrasSchema);
+export const OutboundStreamFormSchema =
+  NetworkSettingsSchema.and(SecuritySettingsSchema).and(StreamExtrasSchema);
 export type OutboundStreamFormValues = z.infer<typeof OutboundStreamFormSchema>;
 
-// Top-level form base: identity (tag, sendThrough), then the per-protocol
-// settings DU, then the stream sub-form, then mux.
+// Top-level form base: identity (tag, sendThrough, targetStrategy), then
+// the per-protocol settings DU, then the stream sub-form, then mux.
+// targetStrategy '' means AsIs (omitted from wire).
 export const OutboundFormBaseSchema = z.object({
   tag: z.string().default(''),
   sendThrough: z.string().default(''),
+  targetStrategy: z.union([OutboundDomainStrategySchema, z.literal('')]).default(''),
   streamSettings: OutboundStreamFormSchema.optional(),
   mux: MuxFormSchema.default({
     enabled: false,

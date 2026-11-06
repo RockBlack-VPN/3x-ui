@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
-// Hysteria v1 inbound (legacy — upstream xray-core kept v1 support but the
-// panel defaults to v2). Each client supplies an `auth` token instead of a
-// UUID/password.
+// Hysteria inbound. Each client supplies an `auth` token instead of a
+// UUID/password. xray-core builds version 2 only — it answers anything else
+// with "version != 2" and rejects the entire config, so a legacy row is
+// coerced rather than carried through.
 export const HysteriaClientSchema = z.object({
   auth: z.string().min(1),
   email: z.string().min(1),
@@ -10,7 +11,10 @@ export const HysteriaClientSchema = z.object({
   totalGB: z.number().int().min(0).default(0),
   expiryTime: z.number().int().default(0),
   enable: z.boolean().default(true),
-  tgId: z.number().int().default(0),
+  tgId: z
+    .union([z.number(), z.string()])
+    .transform((v) => Number(v) || 0)
+    .default(0),
   subId: z.string().default(''),
   comment: z.string().default(''),
   reset: z.number().int().min(0).default(0),
@@ -20,7 +24,7 @@ export const HysteriaClientSchema = z.object({
 export type HysteriaClient = z.infer<typeof HysteriaClientSchema>;
 
 export const HysteriaInboundSettingsSchema = z.object({
-  version: z.number().int().min(1).default(2),
+  version: z.preprocess(() => 2, z.literal(2)).default(2),
   clients: z.array(HysteriaClientSchema).default([]),
 });
 export type HysteriaInboundSettings = z.infer<typeof HysteriaInboundSettingsSchema>;

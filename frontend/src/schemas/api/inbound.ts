@@ -1,13 +1,13 @@
 import { z } from 'zod';
 
-import { PortSchema, SniffingSchema } from '@/schemas/primitives';
+import { InboundPortSchema, SniffingSchema } from '@/schemas/primitives';
 import { InboundSettingsSchema } from '@/schemas/protocols/inbound';
 import { SecuritySettingsSchema } from '@/schemas/protocols/security';
 import { NetworkSettingsSchema, StreamExtrasSchema } from '@/schemas/protocols/stream';
 
 // Top-level inbound shape on the wire. Composes:
 //   - Per-protocol settings via the InboundSettingsSchema discriminated
-//     union (10 protocols, tagged-wrapper {protocol, settings}).
+//     union (11 protocols, tagged-wrapper {protocol, settings}).
 //   - StreamSettings as an intersection of the network DU (6 branches),
 //     security DU (3 branches), and the orthogonal extras (finalmask,
 //     sockopt, externalProxy). Zod 4 supports DU intersection — each
@@ -18,9 +18,8 @@ import { NetworkSettingsSchema, StreamExtrasSchema } from '@/schemas/protocols/s
 // (~9e15) lose precision; the panel works around this for the traffic
 // counters by stringifying them at the API edge. Not modeled here.
 
-export const StreamSettingsSchema = NetworkSettingsSchema
-  .and(SecuritySettingsSchema)
-  .and(StreamExtrasSchema);
+export const StreamSettingsSchema =
+  NetworkSettingsSchema.and(SecuritySettingsSchema).and(StreamExtrasSchema);
 export type StreamSettings = z.infer<typeof StreamSettingsSchema>;
 
 export const InboundCoreSchema = z.object({
@@ -32,8 +31,10 @@ export const InboundCoreSchema = z.object({
   enable: z.boolean().default(true),
   expiryTime: z.number().int().default(0),
   listen: z.string().default(''),
-  port: PortSchema,
+  port: InboundPortSchema,
   tag: z.string().default(''),
+  shareAddrStrategy: z.enum(['node', 'listen', 'custom']).default('node'),
+  shareAddr: z.string().default(''),
   sniffing: SniffingSchema.default({
     enabled: false,
     destOverride: ['http', 'tls', 'quic', 'fakedns'],

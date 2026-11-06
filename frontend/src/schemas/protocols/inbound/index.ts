@@ -1,21 +1,29 @@
 import { z } from 'zod';
 
+import { AmneziawgInboundSettingsSchema } from './amneziawg';
 import { HttpInboundSettingsSchema } from './http';
 import { HysteriaInboundSettingsSchema } from './hysteria';
+import { MasqueInboundSettingsSchema } from './masque';
 import { MixedInboundSettingsSchema } from './mixed';
+import { MtprotoInboundSettingsSchema } from './mtproto';
 import { ShadowsocksInboundSettingsSchema } from './shadowsocks';
 import { TrojanInboundSettingsSchema } from './trojan';
+import { TuicInboundSettingsSchema } from './tuic';
 import { TunInboundSettingsSchema } from './tun';
 import { TunnelInboundSettingsSchema } from './tunnel';
 import { VlessInboundSettingsSchema } from './vless';
 import { VmessInboundSettingsSchema } from './vmess';
 import { WireguardInboundSettingsSchema } from './wireguard';
 
+export * from './amneziawg';
 export * from './http';
 export * from './hysteria';
+export * from './masque';
 export * from './mixed';
+export * from './mtproto';
 export * from './shadowsocks';
 export * from './trojan';
+export * from './tuic';
 export * from './tun';
 export * from './tunnel';
 export * from './vless';
@@ -28,15 +36,19 @@ export * from './wireguard';
 // Consumers narrow on `.protocol` and TypeScript narrows `.settings` to the
 // matching leaf type.
 export const InboundSettingsSchema = z.discriminatedUnion('protocol', [
-  z.object({ protocol: z.literal('vmess'),       settings: VmessInboundSettingsSchema }),
-  z.object({ protocol: z.literal('vless'),       settings: VlessInboundSettingsSchema }),
-  z.object({ protocol: z.literal('trojan'),      settings: TrojanInboundSettingsSchema }),
+  z.object({ protocol: z.literal('vmess'), settings: VmessInboundSettingsSchema }),
+  z.object({ protocol: z.literal('vless'), settings: VlessInboundSettingsSchema }),
+  z.object({ protocol: z.literal('trojan'), settings: TrojanInboundSettingsSchema }),
   z.object({ protocol: z.literal('shadowsocks'), settings: ShadowsocksInboundSettingsSchema }),
-  z.object({ protocol: z.literal('wireguard'),   settings: WireguardInboundSettingsSchema }),
-  z.object({ protocol: z.literal('hysteria'),    settings: HysteriaInboundSettingsSchema }),
-  z.object({ protocol: z.literal('http'),        settings: HttpInboundSettingsSchema }),
-  z.object({ protocol: z.literal('mixed'),       settings: MixedInboundSettingsSchema }),
-  z.object({ protocol: z.literal('tunnel'),      settings: TunnelInboundSettingsSchema }),
-  z.object({ protocol: z.literal('tun'),         settings: TunInboundSettingsSchema }),
+  z.object({ protocol: z.literal('wireguard'), settings: WireguardInboundSettingsSchema }),
+  z.object({ protocol: z.literal('hysteria'), settings: HysteriaInboundSettingsSchema }),
+  z.object({ protocol: z.literal('http'), settings: HttpInboundSettingsSchema }),
+  z.object({ protocol: z.literal('mixed'), settings: MixedInboundSettingsSchema }),
+  z.object({ protocol: z.literal('tunnel'), settings: TunnelInboundSettingsSchema }),
+  z.object({ protocol: z.literal('tun'), settings: TunInboundSettingsSchema }),
+  z.object({ protocol: z.literal('mtproto'), settings: MtprotoInboundSettingsSchema }),
+  z.object({ protocol: z.literal('amneziawg'), settings: AmneziawgInboundSettingsSchema }),
+  z.object({ protocol: z.literal('tuic'), settings: TuicInboundSettingsSchema }),
+  z.object({ protocol: z.literal('masque'), settings: MasqueInboundSettingsSchema }),
 ]);
 export type InboundSettings = z.infer<typeof InboundSettingsSchema>;

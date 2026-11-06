@@ -26,11 +26,14 @@ export function useStatusQuery() {
   });
 
   const status = useMemo(() => query.data ?? new Status(), [query.data]);
-  const refresh = async () => { await query.refetch(); };
+  const refresh = async () => {
+    await query.refetch();
+  };
 
   return {
     status,
-    fetched: query.data !== undefined,
+    fetched: query.data !== undefined || query.isError,
+    fetchError: query.error ? (query.error as Error).message : '',
     refresh,
   };
 }

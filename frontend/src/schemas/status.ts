@@ -26,14 +26,18 @@ export const AppStatsSchema = z.object({
   uptime: z.number(),
 });
 
-export const XrayInfoSchema = z.object({
-  state: z.string(),
-  errorMsg: z.string(),
-  version: z.string(),
-  color: z.string(),
-}).partial();
+export const XrayInfoSchema = z
+  .object({
+    state: z.string(),
+    errorMsg: z.string(),
+    version: z.string(),
+    color: z.string(),
+  })
+  .partial();
 
 export const StatusSchema = z.object({
+  resourceScope: z.string().optional(),
+  unavailableMetrics: z.array(z.string()).optional(),
   cpu: z.number().optional(),
   cpuCores: z.number().optional(),
   logicalPro: z.number().optional(),

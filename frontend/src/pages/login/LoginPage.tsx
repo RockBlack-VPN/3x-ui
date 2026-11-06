@@ -22,9 +22,11 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 
+import { FormProvider, useForm } from 'react-hook-form';
 import { HttpUtil, LanguageManager } from '@/utils';
-import { antdRule } from '@/utils/zodForm';
+import { FormField, rhfZodValidate } from '@/components/form/rhf';
 import { setMessageInstance } from '@/utils/messageBus';
+import SponsorSlot from '@/components/sponsor/SponsorSlot';
 import { pauseAnimationsUntilLeave, useTheme } from '@/hooks/useTheme';
 import { LoginFormSchema, TwoFactorCodeSchema, type LoginFormValues } from '@/schemas/login';
 import './LoginPage.css';
@@ -48,12 +50,12 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [twoFactorEnable, setTwoFactorEnable] = useState(false);
   const [headlineIndex, setHeadlineIndex] = useState(0);
+  const methods = useForm<LoginForm>({
+    defaultValues: { username: '', password: '', twoFactorCode: '' },
+  });
   const [lang, setLang] = useState<string>(() => LanguageManager.getLanguage());
 
-  const headlineWords = useMemo(
-    () => [t('pages.login.hello'), t('pages.login.title')],
-    [t],
-  );
+  const headlineWords = useMemo(() => [t('pages.login.hello'), t('pages.login.title')], [t]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -70,7 +72,9 @@ export default function LoginPage() {
       if (msg.success) setTwoFactorEnable(!!msg.obj);
       setFetched(true);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onSubmit = useCallback(async (values: LoginForm) => {
@@ -109,19 +113,28 @@ export default function LoginPage() {
   }, [isDark, isUltra]);
 
   const langMenuItems = useMemo(
-    () => (LanguageManager.supportedLanguages as { value: string; name: string; icon: string }[]).map((l) => ({
-      key: l.value,
-      label: (
-        <Space size={8}>
-          <span aria-hidden="true">{l.icon}</span>
-          <span>{l.name}</span>
-        </Space>
+    () =>
+      (LanguageManager.supportedLanguages as { value: string; name: string; icon: string }[]).map(
+        (l) => ({
+          key: l.value,
+          label: (
+            <Space size={8}>
+              <span aria-hidden="true">{l.icon}</span>
+              <span>{l.name}</span>
+            </Space>
+          ),
+        }),
       ),
-    })),
     [],
   );
 
-  const themeIcon = !isDark ? <SunOutlined /> : !isUltra ? <MoonOutlined /> : <MoonFilled />;
+  const themeIcon = !isDark ? (
+    <SunOutlined aria-hidden />
+  ) : !isUltra ? (
+    <MoonOutlined aria-hidden />
+  ) : (
+    <MoonFilled aria-hidden />
+  );
 
   return (
     <ConfigProvider theme={antdThemeConfig}>
@@ -160,7 +173,7 @@ export default function LoginPage() {
                 size="large"
                 className="toolbar-btn"
                 aria-label={t('pages.settings.language')}
-                icon={<TranslationOutlined />}
+                icon={<TranslationOutlined aria-hidden />}
               />
             </Popover>
           </div>
@@ -180,66 +193,68 @@ export default function LoginPage() {
                   <b key={headlineIndex}>{headlineWords[headlineIndex]}</b>
                 </h2>
 
-                <Form
-                  layout="vertical"
-                  className="login-form"
-                  onFinish={onSubmit}
-                  initialValues={{ username: '', password: '', twoFactorCode: '' }}
-                >
-                  <Form.Item
-                    label={t('username')}
-                    name="username"
-                    rules={[antdRule(LoginFormSchema.shape.username, t)]}
+                <FormProvider {...methods}>
+                  <Form
+                    layout="vertical"
+                    className="login-form"
+                    onFinish={methods.handleSubmit(onSubmit)}
                   >
-                    <Input
-                      prefix={<UserOutlined />}
-                      autoComplete="username"
-                      size="large"
-                      placeholder={t('username')}
-                      autoFocus
-                    />
-                  </Form.Item>
-
-                  <Form.Item
-                    label={t('password')}
-                    name="password"
-                    rules={[antdRule(LoginFormSchema.shape.password, t)]}
-                  >
-                    <Input.Password
-                      prefix={<LockOutlined />}
-                      autoComplete="current-password"
-                      size="large"
-                      placeholder={t('password')}
-                    />
-                  </Form.Item>
-
-                  {twoFactorEnable && (
-                    <Form.Item
-                      label={t('twoFactorCode')}
-                      name="twoFactorCode"
-                      rules={[antdRule(TwoFactorCodeSchema, t)]}
+                    <FormField
+                      name="username"
+                      label={t('username')}
+                      rules={{ validate: rhfZodValidate(LoginFormSchema.shape.username) }}
                     >
                       <Input
-                        prefix={<KeyOutlined />}
-                        autoComplete="one-time-code"
+                        prefix={<UserOutlined aria-hidden />}
+                        autoComplete="username"
                         size="large"
-                        placeholder={t('twoFactorCode')}
+                        placeholder={t('username')}
+                        autoFocus
                       />
-                    </Form.Item>
-                  )}
+                    </FormField>
 
-                  <Form.Item className="submit-row">
-                    <Button
-                      type="primary"
-                      htmlType="submit"
-                      loading={submitting}
-                      size="large"
-                      block
+                    <FormField
+                      name="password"
+                      label={t('password')}
+                      rules={{ validate: rhfZodValidate(LoginFormSchema.shape.password) }}
                     >
-                      {t('login')}
-                    </Button>
-                  </Form.Item>
-                </Form>
+                      <Input.Password
+                        prefix={<LockOutlined aria-hidden />}
+                        autoComplete="current-password"
+                        size="large"
+                        placeholder={t('password')}
+                      />
+                    </FormField>
+
+                    {twoFactorEnable && (
+                      <FormField
+                        name="twoFactorCode"
+                        label={t('twoFactorCode')}
+                        rules={{ validate: rhfZodValidate(TwoFactorCodeSchema) }}
+                      >
+                        <Input
+                          prefix={<KeyOutlined aria-hidden />}
+                          autoComplete="one-time-code"
+                          size="large"
+                          placeholder={t('twoFactorCode')}
+                        />
+                      </FormField>
+                    )}
+
+                    <Form.Item className="submit-row">
+                      <Button
+                        type="primary"
+                        htmlType="submit"
+                        loading={submitting}
+                        size="large"
+                        block
+                      >
+                        {t('login')}
+                      </Button>
+                    </Form.Item>
+                  </Form>
+                </FormProvider>
+                <SponsorSlot slot="login" variant="compact" className="login-sponsor" />
               </div>
             )}
           </div>

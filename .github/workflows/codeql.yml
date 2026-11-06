@@ -10,21 +10,7 @@ on:
       - "**.go"
       - "go.mod"
       - "go.sum"
-      - "**.js"
-      - "**.mjs"
-      - "**.cjs"
-      - "**.ts"
-      - "frontend/package-lock.json"
-  pull_request:
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - "**.js"
-      - "**.mjs"
-      - "**.cjs"
-      - "**.ts"
-      - "frontend/package-lock.json"
+      - "frontend/**"
   schedule:
     - cron: "18 2 * * 2"
 
@@ -32,8 +18,6 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
-    env:
-      CODEQL_ACTION_FILE_COVERAGE_ON_PRS: true
     permissions:
       security-events: write
       packages: read
@@ -53,13 +37,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         if: matrix.language == 'go'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 

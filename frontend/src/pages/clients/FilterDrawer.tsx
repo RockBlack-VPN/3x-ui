@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Button,
@@ -17,7 +17,10 @@ import {
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 
+import { selectTagRender } from '@/components/form';
 import type { InboundOption } from '@/hooks/useClients';
+import type { NodeRecord } from '@/schemas/node';
+import { formatInboundLabel } from '@/lib/inbounds/label';
 import { emptyFilters, type ClientFilters } from './filters';
 
 interface FilterDrawerProps {
@@ -28,6 +31,7 @@ interface FilterDrawerProps {
   inbounds: InboundOption[];
   protocols: string[];
   groups: string[];
+  nodes: NodeRecord[];
 }
 
 const BUCKET_KEYS = ['active', 'expiring', 'depleted', 'deactive', 'online'] as const;
@@ -40,18 +44,21 @@ export default function FilterDrawer({
   inbounds,
   protocols,
   groups,
+  nodes,
 }: FilterDrawerProps) {
   const { t } = useTranslation();
+  const uid = useId();
 
   function patch<K extends keyof ClientFilters>(key: K, value: ClientFilters[K]) {
     onChange({ ...filters, [key]: value });
   }
 
   const inboundOptions = useMemo(
-    () => inbounds.map((ib) => ({
-      value: ib.id,
-      label: ib.tag ?? '',
-    })),
+    () =>
+      inbounds.map((ib) => ({
+        value: ib.id,
+        label: formatInboundLabel(ib.tag, ib.remark),
+      })),
     [inbounds],
   );
 
@@ -60,9 +67,16 @@ export default function FilterDrawer({
     [protocols],
   );
 
-  const groupOptions = useMemo(
-    () => groups.map((g) => ({ value: g, label: g })),
-    [groups],
+  const groupOptions = useMemo(() => groups.map((g) => ({ value: g, label: g })), [groups]);
+
+  // 0 is the "local panel" sentinel (inbounds without a nodeId) — see
+  // ClientFilters.nodeIds (#4997).
+  const nodeOptions = useMemo(
+    () => [
+      { value: 0, label: t('pages.clients.filters.localPanel') },
+      ...nodes.map((n) => ({ value: n.id, label: n.name || `#${n.id}` })),
+    ],
+    [nodes, t],
   );
 
   const dateRange: [Dayjs | null, Dayjs | null] = [
@@ -75,7 +89,7 @@ export default function FilterDrawer({
       title={t('pages.clients.filterTitle')}
       open={open}
       onClose={() => onOpenChange(false)}
-      width={420}
+      size={420}
       destroyOnHidden
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -90,11 +104,8 @@ export default function FilterDrawer({
     >
       <Form layout="vertical">
         <Form.Item label={<Typography.Text strong>{t('status')}</Typography.Text>}>
-          <Checkbox.Group
-            value={filters.buckets}
-            onChange={(v) => patch('buckets', v as string[])}
-          >
-            <Space direction="vertical">
+          <Checkbox.Group value={filters.buckets} onChange={(v) => patch('buckets', v as string[])}>
+            <Space orientation="vertical">
               {BUCKET_KEYS.map((k) => (
                 <Checkbox key={k} value={k}>
                   {bucketLabel(k, t)}
@@ -104,50 +115,69 @@ export default function FilterDrawer({
           </Checkbox.Group>
         </Form.Item>
 
-        <Form.Item label={t('pages.inbounds.protocol')}>
+        <Form.Item label={t('pages.inbounds.protocol')} htmlFor={`${uid}-protocols`}>
           <Select
+            id={`${uid}-protocols`}
             mode="multiple"
+            tagRender={selectTagRender}
             value={filters.protocols}
             onChange={(v) => patch('protocols', v as string[])}
             options={protocolOptions}
             placeholder={t('pages.inbounds.protocol')}
-            maxTagCount="responsive"
             allowClear
           />
         </Form.Item>
 
-        <Form.Item label={t('inbounds')}>
+        <Form.Item label={t('pages.clients.attachedInbounds')} htmlFor={`${uid}-inbounds`}>
           <Select
+            id={`${uid}-inbounds`}
             mode="multiple"
+            tagRender={selectTagRender}
             value={filters.inboundIds}
             onChange={(v) => patch('inboundIds', v as number[])}
             options={inboundOptions}
-            placeholder={t('inbounds')}
-            maxTagCount="responsive"
+            placeholder={t('pages.clients.attachedInbounds')}
             allowClear
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             listHeight={220}
           />
         </Form.Item>
 
-        <Form.Item label={t('pages.clients.group')}>
+        {nodes.length > 0 && (
+          <Form.Item label={t('pages.clients.filters.nodes')} htmlFor={`${uid}-nodes`}>
+            <Select
+              id={`${uid}-nodes`}
+              mode="multiple"
+              tagRender={selectTagRender}
+              value={filters.nodeIds}
+              onChange={(v) => patch('nodeIds', v as number[])}
+              options={nodeOptions}
+              placeholder={t('pages.clients.filters.nodes')}
+              allowClear
+              showSearch={{ optionFilterProp: 'label' }}
+              listHeight={220}
+            />
+          </Form.Item>
+        )}
+
+        <Form.Item label={t('pages.clients.group')} htmlFor={`${uid}-groups`}>
           <Select
+            id={`${uid}-groups`}
             mode="multiple"
+            tagRender={selectTagRender}
             value={filters.groups}
             onChange={(v) => patch('groups', v as string[])}
             options={groupOptions}
             placeholder={t('pages.clients.groupPlaceholder')}
-            maxTagCount="responsive"
             allowClear
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             listHeight={220}
           />
         </Form.Item>
 
-        <Form.Item label={t('pages.clients.expiryTime')}>
+        <Form.Item label={t('pages.clients.expiryTime')} htmlFor={`${uid}-expiry`}>
           <DatePicker.RangePicker
+            id={`${uid}-expiry`}
             value={dateRange}
             onChange={(range) => {
               const from = range?.[0]?.startOf('day').valueOf();
@@ -159,10 +189,11 @@ export default function FilterDrawer({
           />
         </Form.Item>
 
-        <Form.Item label={`${t('pages.clients.traffic')} (GB)`}>
+        <Form.Item label={`${t('pages.clients.traffic')} (GB)`} htmlFor={`${uid}-usage-from`}>
           <Row gutter={8}>
             <Col span={12}>
               <InputNumber
+                id={`${uid}-usage-from`}
                 value={filters.usageFromGB}
                 min={0}
                 step={1}
@@ -173,6 +204,7 @@ export default function FilterDrawer({
             </Col>
             <Col span={12}>
               <InputNumber
+                aria-label={`${t('pages.clients.traffic')} (GB) ${t('to')}`}
                 value={filters.usageToGB}
                 min={0}
                 step={1}
@@ -232,11 +264,17 @@ export default function FilterDrawer({
 
 function bucketLabel(key: string, t: (k: string) => string): string {
   switch (key) {
-    case 'active': return t('subscription.active');
-    case 'expiring': return t('depletingSoon');
-    case 'depleted': return t('depleted');
-    case 'deactive': return t('disabled');
-    case 'online': return t('online');
-    default: return key;
+    case 'active':
+      return t('subscription.active');
+    case 'expiring':
+      return t('depletingSoon');
+    case 'depleted':
+      return t('depleted');
+    case 'deactive':
+      return t('disabled');
+    case 'online':
+      return t('online');
+    default:
+      return key;
   }
 }

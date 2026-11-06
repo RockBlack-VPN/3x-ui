@@ -1,30 +1,72 @@
 import { z } from 'zod';
 
-import { PortSchema, SniffingSchema } from '@/schemas/primitives';
+import { InboundPortSchema, SniffingSchema } from '@/schemas/primitives';
 import { InboundSettingsSchema } from '@/schemas/protocols/inbound';
-import { SecuritySettingsSchema } from '@/schemas/protocols/security';
+import {
+  TlsCertInlineSchema,
+  TlsStreamSettingsSchema,
+  securitySettingsSchemaFor,
+  tlsCertUsesFiles,
+} from '@/schemas/protocols/security';
 import { NetworkSettingsSchema, StreamExtrasSchema } from '@/schemas/protocols/stream';
 
-// InboundFormValues = the values shape Form.useForm<T>() carries in
-// InboundFormModal. Mirrors the wire shape (so submission can hand
-// values straight to Schema.parse + POST) plus the DB-side fields that
-// the panel's /panel/api/inbounds/add endpoint expects alongside.
-//
-// Differences from schemas/api/inbound.ts InboundSchema:
-//   - settings/streamSettings/sniffing are nested OBJECTS here, not the
-//     JSON strings the endpoint accepts. The form holds typed data; the
-//     submit handler stringifies right before POSTing.
-//   - Adds DB fields not in InboundSchema: up, down, total, trafficReset,
-//     lastTrafficResetTime, nodeId. These flow through the DBInbound row,
-//     not the xray-config slice.
+// Inbound certificates must follow the selected editor mode. The shared wire
+// union also serves outbound TLS, where a client certificate is optional.
+const InboundTlsCertFieldsSchema = TlsCertInlineSchema.extend({
+  useFile: z.boolean().optional(),
+  certificateFile: z.string().default(''),
+  keyFile: z.string().default(''),
+  certificate: z.array(z.string()).default([]),
+  key: z.array(z.string()).default([]),
+});
 
-export const InboundStreamFormSchema = NetworkSettingsSchema
-  .and(SecuritySettingsSchema)
-  .and(StreamExtrasSchema);
+const InboundTlsCertSchema = InboundTlsCertFieldsSchema.superRefine((cert, ctx) => {
+  const useFile = tlsCertUsesFiles(cert);
+  const hasCertificate = useFile
+    ? cert.certificateFile.trim() !== ''
+    : cert.certificate.some((line) => line.trim() !== '');
+  const hasKey = useFile ? cert.keyFile.trim() !== '' : cert.key.some((line) => line.trim() !== '');
+  if (!hasCertificate) {
+    ctx.addIssue({
+      code: 'custom',
+      path: [useFile ? 'certificateFile' : 'certificate'],
+      message: 'pages.inbounds.form.tlsCertificateRequired',
+    });
+  }
+  if (cert.usage !== 'verify' && !hasKey) {
+    ctx.addIssue({
+      code: 'custom',
+      path: [useFile ? 'keyFile' : 'key'],
+      message: 'pages.inbounds.form.tlsPrivateKeyRequired',
+    });
+  }
+}).transform((cert) => {
+  const { useFile: _useFile, certificateFile, keyFile, certificate, key, ...settings } = cert;
+  return tlsCertUsesFiles(cert)
+    ? { ...settings, certificateFile, keyFile }
+    : { ...settings, certificate, key };
+});
+
+const InboundTlsSettingsSchema = TlsStreamSettingsSchema.extend({
+  certificates: z
+    .array(InboundTlsCertSchema)
+    .default([])
+    .refine((certificates) => certificates.some((cert) => cert.usage !== 'verify'), {
+      error: 'pages.inbounds.form.tlsServerCertificateRequired',
+    }),
+});
+
+const InboundSecuritySettingsSchema = securitySettingsSchemaFor(InboundTlsSettingsSchema);
+
+export const InboundStreamFormSchema = NetworkSettingsSchema.and(InboundSecuritySettingsSchema).and(
+  StreamExtrasSchema,
+);
 export type InboundStreamFormValues = z.infer<typeof InboundStreamFormSchema>;
 
 export const TrafficResetSchema = z.enum(['never', 'hourly', 'daily', 'weekly', 'monthly']);
 export type TrafficReset = z.infer<typeof TrafficResetSchema>;
+export const ShareAddrStrategySchema = z.enum(['node', 'listen', 'custom']);
+export type ShareAddrStrategy = z.infer<typeof ShareAddrStrategySchema>;
 
 // Db-side fields layered on top of the xray slice. These mirror the
 // DBInbound model — they live in the SQL row, not in xray's config.
@@ -33,18 +75,21 @@ export const InboundDbFieldsSchema = z.object({
   down: z.number().int().min(0).default(0),
   total: z.number().int().min(0).default(0),
   trafficReset: TrafficResetSchema.default('never'),
+  trafficResetDay: z.number().int().min(1).max(31).default(1),
   lastTrafficResetTime: z.number().int().default(0),
   nodeId: z.number().int().nullable().optional(),
+  shareAddrStrategy: ShareAddrStrategySchema.default('node'),
+  shareAddr: z.string().default(''),
+  subSortIndex: z.number().int().default(1),
+  excludeFromSub: z.boolean().default(false),
+  disableFlow: z.boolean().default(false),
 });
 export type InboundDbFields = z.infer<typeof InboundDbFieldsSchema>;
 
-// Base fields that apply to every inbound regardless of protocol or
-// transport. The protocol-specific `settings` and the transport-specific
-// `streamSettings` are layered on via intersection below.
 export const InboundFormBaseSchema = z.object({
   remark: z.string().default(''),
   enable: z.boolean().default(true),
-  port: PortSchema,
+  port: InboundPortSchema,
   listen: z.string().default(''),
   tag: z.string().default(''),
   expiryTime: z.number().int().default(0),
@@ -63,15 +108,10 @@ export type InboundFormBase = z.infer<typeof InboundFormBaseSchema>;
 
 // Full form values = base + db fields + protocol-discriminated settings.
 // Consumers narrow on `.protocol` to access the matching settings branch.
-export const InboundFormSchema = InboundFormBaseSchema
-  .and(InboundDbFieldsSchema)
-  .and(InboundSettingsSchema);
+export const InboundFormSchema =
+  InboundFormBaseSchema.and(InboundDbFieldsSchema).and(InboundSettingsSchema);
 export type InboundFormValues = z.infer<typeof InboundFormSchema>;
 
-// Fallback rows ride alongside the inbound submission for VLESS/Trojan
-// hosts. They're saved via a separate endpoint after the main inbound
-// POST returns, so the schema lives here but is not part of the wire
-// inbound payload.
 export const FallbackRowSchema = z.object({
   rowKey: z.string(),
   childId: z.number().int().nullable(),

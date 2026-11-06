@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useLocation } from 'react-router';
 import {
   Alert,
   Button,
@@ -12,17 +13,8 @@ import {
   Row,
   Space,
   Spin,
-  Tabs,
-  Tooltip,
   message,
 } from 'antd';
-import {
-  CloudServerOutlined,
-  CodeOutlined,
-  MessageOutlined,
-  SafetyOutlined,
-  SettingOutlined,
-} from '@ant-design/icons';
 
 import { HttpUtil, PromiseUtil } from '@/utils';
 import { setMessageInstance } from '@/utils/messageBus';
@@ -30,28 +22,31 @@ import { useTheme } from '@/hooks/useTheme';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { useAllSettings } from '@/api/queries/useAllSettings';
 import { AllSettingSchema } from '@/schemas/setting';
-import AppSidebar from '@/components/AppSidebar';
+import AppSidebar from '@/layouts/AppSidebar';
 import GeneralTab from './GeneralTab';
 import SecurityTab from './SecurityTab';
 import TelegramTab from './TelegramTab';
+import EmailTab from './EmailTab';
+import DiscordTab from './DiscordTab';
 import SubscriptionGeneralTab from './SubscriptionGeneralTab';
 import SubscriptionFormatsTab from './SubscriptionFormatsTab';
+import SubscriptionBalancersTab from './SubscriptionBalancersTab';
 import './SettingsPage.css';
 
 interface ApiMsg {
   success?: boolean;
 }
 
-const tabSlugs = ['general', 'security', 'telegram', 'subscription', 'subscription-formats'];
-
-function slugToKey(slug: string): string {
-  const i = tabSlugs.indexOf(slug);
-  return i >= 0 ? String(i + 1) : '1';
-}
-
-function keyToSlug(key: string): string {
-  return tabSlugs[Number(key) - 1] || tabSlugs[0];
-}
+const tabSlugs = [
+  'general',
+  'security',
+  'telegram',
+  'email',
+  'discord',
+  'subscription',
+  'subscription-formats',
+  'subscription-balancers',
+];
 
 function isIp(h: string): boolean {
   if (typeof h !== 'string') return false;
@@ -92,41 +87,21 @@ export default function SettingsPage() {
     setSpinning,
     saveDisabled,
     saveAll,
+    savePayload,
   } = useAllSettings();
 
-  const [entryHost, setEntryHost] = useState('');
-  const [entryPort, setEntryPort] = useState('');
-  const [entryIsIP, setEntryIsIP] = useState(false);
-
-  useEffect(() => {
-     
-    const host = window.location.hostname;
-    setEntryHost(host);
-    setEntryPort(window.location.port);
-    setEntryIsIP(isIp(host));
-     
-  }, []);
+  const [entryHost] = useState(() => window.location.hostname);
+  const [entryPort] = useState(() => window.location.port);
+  const [entryIsIP] = useState(() => isIp(window.location.hostname));
 
   const [alertVisible, setAlertVisible] = useState(true);
-  const [activeTabKey, setActiveTabKey] = useState<string>(() => slugToKey(window.location.hash.slice(1)));
-
-  useEffect(() => {
-    const onHashChange = () => setActiveTabKey(slugToKey(window.location.hash.slice(1)));
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
-
-  function onTabChange(key: string) {
-    setActiveTabKey(key);
-    const slug = keyToSlug(key);
-    if (window.location.hash !== `#${slug}`) {
-      history.replaceState(null, '', `#${slug}`);
-    }
-  }
+  const location = useLocation();
+  const slug = location.hash.replace(/^#/, '');
+  const activeSlug = tabSlugs.includes(slug) ? slug : 'general';
 
   function rebuildUrlAfterRestart(): string {
     const { webDomain, webPort, webBasePath, webCertFile, webKeyFile } = allSetting;
-    const newProtocol = (webCertFile || webKeyFile) ? 'https:' : 'http:';
+    const newProtocol = webCertFile || webKeyFile ? 'https:' : 'http:';
 
     let base = webBasePath ? webBasePath.replace(/^\//, '') : '';
     if (base && !base.endsWith('/')) base += '/';
@@ -171,7 +146,7 @@ export default function SettingsPage() {
       onOk: async () => {
         setSpinning(true);
         try {
-          const msg = await HttpUtil.post('/panel/setting/restartPanel') as ApiMsg;
+          const msg = (await HttpUtil.post('/panel/api/setting/restartPanel')) as ApiMsg;
           if (!msg?.success) return;
           await PromiseUtil.sleep(5000);
           window.location.replace(rebuildUrlAfterRestart());
@@ -197,7 +172,11 @@ export default function SettingsPage() {
     if (allSetting.subEnable) {
       let subPath = allSetting.subPath;
       if (allSetting.subURI) {
-        try { subPath = new URL(allSetting.subURI).pathname; } catch { /* noop */ }
+        try {
+          subPath = new URL(allSetting.subURI).pathname;
+        } catch {
+          /* noop */
+        }
       }
       if (subPath === '/sub/') {
         out.push(t('pages.settings.warnDefaultSubPath'));
@@ -206,7 +185,11 @@ export default function SettingsPage() {
     if (allSetting.subJsonEnable) {
       let p = allSetting.subJsonPath;
       if (allSetting.subJsonURI) {
-        try { p = new URL(allSetting.subJsonURI).pathname; } catch { /* noop */ }
+        try {
+          p = new URL(allSetting.subJsonURI).pathname;
+        } catch {
+          /* noop */
+        }
       }
       if (p === '/json/') {
         out.push(t('pages.settings.warnDefaultJsonPath'));
@@ -222,58 +205,32 @@ export default function SettingsPage() {
     return classes.join(' ');
   }, [isDark, isUltra]);
 
-  const tabItems = useMemo(() => {
-    const items: { key: string; label: React.ReactNode; children: React.ReactNode }[] = [
-      {
-        key: '1',
-        label: (
-          <Tooltip title={isMobile ? t('pages.settings.panelSettings') : null}>
-            <span><SettingOutlined />{!isMobile && <> {t('pages.settings.panelSettings')}</>}</span>
-          </Tooltip>
-        ),
-        children: <GeneralTab allSetting={allSetting} updateSetting={updateSetting} />,
-      },
-      {
-        key: '2',
-        label: (
-          <Tooltip title={isMobile ? t('pages.settings.securitySettings') : null}>
-            <span><SafetyOutlined />{!isMobile && <> {t('pages.settings.securitySettings')}</>}</span>
-          </Tooltip>
-        ),
-        children: <SecurityTab allSetting={allSetting} updateSetting={updateSetting} />,
-      },
-      {
-        key: '3',
-        label: (
-          <Tooltip title={isMobile ? t('pages.settings.TGBotSettings') : null}>
-            <span><MessageOutlined />{!isMobile && <> {t('pages.settings.TGBotSettings')}</>}</span>
-          </Tooltip>
-        ),
-        children: <TelegramTab allSetting={allSetting} updateSetting={updateSetting} />,
-      },
-      {
-        key: '4',
-        label: (
-          <Tooltip title={isMobile ? t('pages.settings.subSettings') : null}>
-            <span><CloudServerOutlined />{!isMobile && <> {t('pages.settings.subSettings')}</>}</span>
-          </Tooltip>
-        ),
-        children: <SubscriptionGeneralTab allSetting={allSetting} updateSetting={updateSetting} />,
-      },
-    ];
-    if (allSetting.subJsonEnable || allSetting.subClashEnable) {
-      items.push({
-        key: '5',
-        label: (
-          <Tooltip title={isMobile ? `${t('pages.settings.subSettings')} (Formats)` : null}>
-            <span><CodeOutlined />{!isMobile && <> {t('pages.settings.subSettings')} (Formats)</>}</span>
-          </Tooltip>
-        ),
-        children: <SubscriptionFormatsTab allSetting={allSetting} updateSetting={updateSetting} />,
-      });
+  const categoryBody = useMemo(() => {
+    switch (activeSlug) {
+      case 'security':
+        return (
+          <SecurityTab
+            allSetting={allSetting}
+            updateSetting={updateSetting}
+            saveSetting={savePayload}
+          />
+        );
+      case 'telegram':
+        return <TelegramTab allSetting={allSetting} updateSetting={updateSetting} />;
+      case 'email':
+        return <EmailTab allSetting={allSetting} updateSetting={updateSetting} />;
+      case 'discord':
+        return <DiscordTab allSetting={allSetting} updateSetting={updateSetting} />;
+      case 'subscription':
+        return <SubscriptionGeneralTab allSetting={allSetting} updateSetting={updateSetting} />;
+      case 'subscription-formats':
+        return <SubscriptionFormatsTab allSetting={allSetting} updateSetting={updateSetting} />;
+      case 'subscription-balancers':
+        return <SubscriptionBalancersTab allSetting={allSetting} updateSetting={updateSetting} />;
+      default:
+        return <GeneralTab allSetting={allSetting} updateSetting={updateSetting} />;
     }
-    return items;
-  }, [allSetting, updateSetting, isMobile, t]);
+  }, [activeSlug, allSetting, updateSetting, savePayload]);
 
   return (
     <ConfigProvider theme={antdThemeConfig}>
@@ -284,7 +241,13 @@ export default function SettingsPage() {
 
         <Layout className="content-shell">
           <Layout.Content id="content-layout" className="content-area">
-            <Spin spinning={spinning || !fetched} delay={200} description={t('loading')} size="large">
+            <Spin
+              aria-live="off"
+              spinning={spinning || !fetched}
+              delay={200}
+              description={t('loading')}
+              size="large"
+            >
               {!fetched ? (
                 <div className="loading-spacer" />
               ) : (
@@ -296,14 +259,16 @@ export default function SettingsPage() {
                       closable={{ onClose: () => setAlertVisible(false) }}
                       className="conf-alert"
                       title={t('pages.settings.securityWarnings')}
-                      description={(
+                      description={
                         <>
                           <b>{t('pages.settings.panelExposed')}</b>
                           <ul>
-                            {confAlerts.map((msg, i) => <li key={i}>{msg}</li>)}
+                            {confAlerts.map((msg, i) => (
+                              <li key={i}>{msg}</li>
+                            ))}
                           </ul>
                         </>
-                      )}
+                      }
                     />
                   )}
 
@@ -316,7 +281,12 @@ export default function SettingsPage() {
                               <Button type="primary" disabled={saveDisabled} onClick={onSave}>
                                 {t('pages.settings.save')}
                               </Button>
-                              <Button type="primary" danger disabled={!saveDisabled} onClick={restartPanel}>
+                              <Button
+                                type="primary"
+                                danger
+                                disabled={!saveDisabled}
+                                onClick={restartPanel}
+                              >
                                 {t('pages.settings.restartPanel')}
                               </Button>
                             </Space>
@@ -330,14 +300,7 @@ export default function SettingsPage() {
                     </Col>
 
                     <Col span={24}>
-                      <Card hoverable>
-                        <Tabs
-                          activeKey={activeTabKey}
-                          onChange={onTabChange}
-                          className={isMobile ? 'icons-only' : ''}
-                          items={tabItems}
-                        />
-                      </Card>
+                      <Card hoverable>{categoryBody}</Card>
                     </Col>
                   </Row>
                 </>

@@ -13,6 +13,7 @@ import (
 type walkOverride struct {
 	Field string
 	Kind  TypeKind
+	Type  TypeRef
 }
 
 type packageRequest struct {
@@ -57,11 +58,12 @@ func walkPackages(requests []packageRequest) ([]Schema, []Alias, error) {
 							}
 							overrides := req.Overrides[ts.Name.Name]
 							for _, fld := range strct.Fields.List {
-								for _, f := range buildFields(fld, overrides) {
-									s.Fields = append(s.Fields, f)
-								}
+								s.Fields = append(s.Fields, buildFields(fld, overrides)...)
 							}
 							schemas = append(schemas, s)
+							continue
+						}
+						if _, ok := ts.Type.(*ast.InterfaceType); ok {
 							continue
 						}
 						if req.AliasAllow != nil && !req.AliasAllow[ts.Name.Name] {
@@ -102,7 +104,7 @@ func buildFields(fld *ast.Field, overrides []walkOverride) []Field {
 	if fld.Tag != nil {
 		tag = fld.Tag.Value
 	}
-	jsonTag, validateTag, gormDash := parseStructTag(tag)
+	jsonTag, validateTag, exampleTag, gormDash := parseStructTag(tag)
 	if gormDash && jsonTag == "" {
 		return nil
 	}
@@ -121,7 +123,11 @@ func buildFields(fld *ast.Field, overrides []walkOverride) []Field {
 		t := exprToType(fld.Type)
 		for _, o := range overrides {
 			if o.Field == n.Name || o.Field == jsonName {
-				t = TypeRef{Kind: o.Kind}
+				if o.Type.Kind != "" {
+					t = o.Type
+				} else {
+					t = TypeRef{Kind: o.Kind}
+				}
 				break
 			}
 		}
@@ -132,6 +138,7 @@ func buildFields(fld *ast.Field, overrides []walkOverride) []Field {
 			Optional: omitempty || isPointer(fld.Type),
 			Validate: validate,
 			Doc:      doc,
+			Example:  exampleTag,
 		})
 	}
 
@@ -143,7 +150,11 @@ func buildFields(fld *ast.Field, overrides []walkOverride) []Field {
 		t := exprToType(fld.Type)
 		for _, o := range overrides {
 			if o.Field == exprIdentName(fld.Type) || o.Field == jsonName {
-				t = TypeRef{Kind: o.Kind}
+				if o.Type.Kind != "" {
+					t = o.Type
+				} else {
+					t = TypeRef{Kind: o.Kind}
+				}
 				break
 			}
 		}
@@ -154,6 +165,7 @@ func buildFields(fld *ast.Field, overrides []walkOverride) []Field {
 			Optional: omitempty || isPointer(fld.Type),
 			Validate: validate,
 			Doc:      doc,
+			Example:  exampleTag,
 		})
 	}
 
@@ -197,8 +209,10 @@ func identType(name string) TypeRef {
 		return TypeRef{Kind: KindString}
 	case "bool":
 		return TypeRef{Kind: KindBool}
-	case "int", "int8", "int16", "int32", "int64",
-		"uint", "uint8", "uint16", "uint32", "uint64":
+	case "int64", "uint64":
+		return TypeRef{Kind: KindInt, Name: "int64"}
+	case "int", "int8", "int16", "int32",
+		"uint", "uint8", "uint16", "uint32":
 		return TypeRef{Kind: KindInt}
 	case "float32", "float64":
 		return TypeRef{Kind: KindNumber}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Input, Modal, Space, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -46,11 +46,16 @@ export default function GroupAddClientsModal({
     [candidates],
   );
 
-  useEffect(() => {
-    if (!open) return;
-    setSelectedEmails([]);
-    setSearch('');
-  }, [open, rows]);
+  // React resets this during render rather than in an effect so the modal's
+  // first open frame already shows cleared fields.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setSelectedEmails([]);
+      setSearch('');
+    }
+  }
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -74,7 +79,11 @@ export default function GroupAddClientsModal({
         width: 140,
         ellipsis: true,
         render: (g: string) =>
-          g ? <Tag color="geekblue">{g}</Tag> : <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span>,
+          g ? (
+            <Tag color="geekblue">{g}</Tag>
+          ) : (
+            <Typography.Text type="secondary">—</Typography.Text>
+          ),
       },
       {
         title: t('enable'),
@@ -122,13 +131,14 @@ export default function GroupAddClientsModal({
         {t('pages.groups.addToGroupDesc')}
       </Typography.Paragraph>
 
-      <Space direction="vertical" size="small" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="small" style={{ width: '100%' }}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
           <Input.Search
             allowClear
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t('pages.inbounds.attachClientsSearchPlaceholder')}
+            aria-label={t('pages.inbounds.attachClientsSearchPlaceholder')}
             style={{ maxWidth: 320 }}
           />
           <Typography.Text type="secondary">
@@ -139,7 +149,7 @@ export default function GroupAddClientsModal({
           </Typography.Text>
         </Space>
         {rows.length === 0 ? (
-          <Alert type="info" showIcon message={t('pages.groups.addToGroupEmpty')} />
+          <Alert type="info" showIcon title={t('pages.groups.addToGroupEmpty')} />
         ) : (
           <Table<ClientRow>
             size="small"

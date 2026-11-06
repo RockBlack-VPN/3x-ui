@@ -4,8 +4,9 @@ import { Alert, Button, Collapse, Modal, Radio, Spin, Tag, Tooltip } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons';
 
 import { HttpUtil } from '@/utils';
+import { activateOnKey } from '@/utils/a11y';
 import type { Status } from '@/models/status';
-import CustomGeoSection from './CustomGeoSection';
+import GeodataSection from './GeodataSection';
 import './VersionModal.css';
 
 interface BusyEvent {
@@ -37,7 +38,6 @@ export default function VersionModal({ open, status, onClose, onBusy }: VersionM
   const [loading, setLoading] = useState(false);
 
   const fetchVersions = useCallback(async () => {
-    setLoading(true);
     try {
       const msg = await HttpUtil.get<string[]>('/panel/api/server/getXrayVersion');
       if (msg?.success) setVersions(msg.obj || []);
@@ -46,8 +46,14 @@ export default function VersionModal({ open, status, onClose, onBusy }: VersionM
     }
   }, []);
 
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setLoading(true);
+  }
+
   useEffect(() => {
-    if (open) fetchVersions();
+    if (open) void fetchVersions();
   }, [open, fetchVersions]);
 
   function switchXrayVersion(version: string) {
@@ -95,14 +101,9 @@ export default function VersionModal({ open, status, onClose, onBusy }: VersionM
   const activeKeyStr = Array.isArray(activeKey) ? activeKey[0] : activeKey;
 
   return (
-    <Modal
-      open={open}
-      title={t('pages.index.xrayUpdates')}
-      footer={null}
-      onCancel={onClose}
-    >
+    <Modal open={open} title={t('pages.index.xrayUpdates')} footer={null} onCancel={onClose}>
       {modalContextHolder}
-      <Spin spinning={loading}>
+      <Spin aria-live="off" spinning={loading}>
         <Collapse
           accordion
           activeKey={activeKey}
@@ -145,7 +146,11 @@ export default function VersionModal({ open, status, onClose, onBusy }: VersionM
                         <Tooltip title={t('update')}>
                           <ReloadOutlined
                             className="reload-icon"
+                            role="button"
+                            tabIndex={0}
+                            aria-label={t('update')}
                             onClick={() => updateGeofile(file)}
+                            onKeyDown={activateOnKey(() => updateGeofile(file))}
                           />
                         </Tooltip>
                       </div>
@@ -161,8 +166,10 @@ export default function VersionModal({ open, status, onClose, onBusy }: VersionM
             },
             {
               key: '3',
-              label: t('pages.index.customGeoTitle'),
-              children: <CustomGeoSection active={activeKeyStr === '3'} />,
+              label: t('pages.index.geodataTitle'),
+              children: (
+                <GeodataSection active={activeKeyStr === '3'} onBusy={onBusy} onClose={onClose} />
+              ),
             },
           ]}
         />
